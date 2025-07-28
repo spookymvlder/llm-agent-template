@@ -73,7 +73,7 @@ def analyze_media_url(url: str, time_limit_days: int = None) -> str:
 
 
 
-example_tool_name = FunctionTool(
+example_function_tool = FunctionTool(
     fn=analyze_media_url,
     metadata=ToolMetadata(
         name="sample function tool",
@@ -86,24 +86,18 @@ example_tool_name = FunctionTool(
     )
 )
 
-query_engine_tools = [
-    QueryEngineTool(
+example_query_tool = QueryEngineTool(
         query_engine=q_engine,
         metadata=ToolMetadata(
             name="sample tool 1",
             description=(
                 "Use a detailed plain text question to act as input for the tool."),
         ),
-    ),
-    QueryEngineTool(
-        query_engine=q_engine,
-        metadata=ToolMetadata(
-            name="sample tool 2",
-            description=(
-                "Use a detailed plain text question to act as input for the tool."),
-        ),
-    ),
-    example_tool_name
+    )
+
+query_engine_tools = [
+    example_query_tool,
+    example_function_tool
 ]
 
 def getQueryTools():
