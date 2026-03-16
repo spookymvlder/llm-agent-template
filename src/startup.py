@@ -45,7 +45,7 @@ def _run_ingest(manager: IndexManager, chroma: ChromaIndexManager) -> None:
 def _build_managers() -> tuple[IndexManager, ChromaIndexManager]:
     return (
         IndexManager(raw_dir=cfg.raw_dir, env_dir=cfg.env_dir),
-        ChromaIndexManager(chroma_dir=cfg.chroma_dir, text_column="text"),
+        ChromaIndexManager(chroma_dir=cfg.chroma_dir, text_column="text", collection_name=cfg.collection_name),
     )
 
 

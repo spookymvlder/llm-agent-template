@@ -41,6 +41,9 @@ def _as_list(value: str | None, default: list[str] | None = None, separator: str
 def _optional_provider(value: str | None) -> LLMProvider | None:
     return LLMProvider(value.lower()) if value else None    
 
+def _optional_embedder(value: str | None) -> EmbeddingProvider | None:
+    return EmbeddingProvider(value.lower()) if value else None
+
 def _optional_str(value: str | None) -> str | None:
     return value.strip() or None if value else None
 
@@ -84,7 +87,6 @@ class AppConfig:
     data_dir: Path
     raw_dir: Path
     processed_dir: Path
-    indices_dir: Path
     logs_dir: Path
     chroma_dir: Path
 
@@ -104,7 +106,7 @@ class AppConfig:
     # Keys (optional depending on provider)
     openai_api_key: str | None
     google_api_key: str | None
-    
+    anthropic_api_key: str | None
 
     # Ollama settings
     ollama_base_url: str
@@ -114,16 +116,17 @@ class AppConfig:
     memory_token_limit: int
 
     # Embeddings
-    embedding_provider: str  # "huggingface" | "ollama"
+    embedding_provider: str = EmbeddingProvider.HUGGINGFACE  # "huggingface" | "ollama"
     embedding_model: str
     chunk_size: int
 
     # Retrieval
     top_k: int
 
-    # Import Settings
-    load_size: int
-    overwrite_files: bool
+    # Chroma
+    collection_name: str
+    distance_metric: str
+
 
     @property
     def llm_settings(self) -> LlmSettings:
@@ -202,9 +205,8 @@ class AppConfig:
         
         # All subdirectories are relative to data_dir / env, except for raw.
         processed_dir = (env_dir / "processed").resolve()
-        indices_dir = (env_dir / "indices").resolve()
         logs_dir = (env_dir / "logs").resolve()
-        chroma_dir = (env_dir / "indices" / "chroma").resolve()
+        chroma_dir = (env_dir /  "chroma").resolve()
 
         load_seed=_as_int(os.getenv("SEED"), default=42)
 
@@ -212,7 +214,6 @@ class AppConfig:
         cfg =  AppConfig(
 
             # General Settings
-            overwrite_files=_as_bool(os.getenv("OVERWRITE_FILES"), default=False),
             seed=load_seed,
             rng=np.random.default_rng(load_seed),
             environment=env_mode,
@@ -222,7 +223,6 @@ class AppConfig:
             data_dir=data_dir,
             raw_dir=raw_dir,
             processed_dir=processed_dir,
-            indices_dir=indices_dir,
             logs_dir=logs_dir,
             chroma_dir=chroma_dir,
             
@@ -240,6 +240,7 @@ class AppConfig:
             # LLM Keys
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             google_api_key=os.getenv("GOOGLE_API_KEY"),
+            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
 
             # RAG Configuration
             ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
@@ -250,27 +251,21 @@ class AppConfig:
 
             # Embedder Settings
             distance_metric=os.getenv("DISTANCE_METRIC", "cosine"),
-            embedding_provider=os.getenv("EMBEDDING_PROVIDER", "huggingface").lower(),
+            embedding_provider=_optional_embedder(os.getenv("EMBEDDING_PROVIDER")),
             embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5").strip(),
             chunk_size=_as_int(os.getenv("CHUNK_SIZE"), default=2048),   
 
             # Retrieval Settings
             top_k=_as_int(os.getenv("RETRIEVAL_TOP_K"), default=5),
             
-            # Load Settings
-            paper_categories=_as_list(os.getenv("PAPER_CATEGORIES"), default=["cs.LG", "cs.CV", "cs.CL", "cs.AI"]),
-            use_prefix=_as_bool(os.getenv("USE_PREFIX"), default=True),
-            random_load=_as_bool(os.getenv("USE_RANDOM_LOAD"), default=True),
-            load_size=_as_int(os.getenv("LOAD_SIZE"), default=100),             # Load size set as low value for testing, no reason to accidently process 50,000 records.
 
             # Filenames
-            #collection_name=collection_name,
-            source_data=os.getenv("SOURCE_DATA", "arxiv-metadata-oai-snapshot.json"),
+            collection_name=os.getenv("COLLECTION_NAME", "documents"),
+
         )
         
         cfg.raw_dir.mkdir(parents=True, exist_ok=True)
         cfg.processed_dir.mkdir(parents=True, exist_ok=True)
-        cfg.indices_dir.mkdir(parents=True, exist_ok=True)
         cfg.logs_dir.mkdir(parents=True, exist_ok=True)
         cfg.chroma_dir.mkdir(parents=True, exist_ok=True)
         
