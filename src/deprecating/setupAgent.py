@@ -86,10 +86,10 @@ except Exception as e:
 
 q_engine = index.as_query_engine(similarity_top_k=3, llm=llm)
 
-import agentTools
+import agent_setup.agent_tools as agent_tools
 
 agent = ReActAgent.from_tools(
-    agentTools.getQueryTools(),
+    agent_tools.getQueryTools(),
     llm=llm,
     verbose=True,
     max_turns=10,

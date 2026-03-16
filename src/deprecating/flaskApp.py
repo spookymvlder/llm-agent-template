@@ -3,7 +3,7 @@ from flask_session import Session
 
 import os
 import logging
-from setupAgent import agent, logger
+from deprecating.setupAgent import agent, logger
 
 app = Flask(__name__)
 

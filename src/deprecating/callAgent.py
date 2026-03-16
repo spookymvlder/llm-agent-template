@@ -1,4 +1,4 @@
-from setupAgent import agent, logger
+from deprecating.setupAgent import agent, logger
 
 
 #If tool is simply asking the agent a question
