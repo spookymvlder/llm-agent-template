@@ -30,7 +30,7 @@ async def chat() -> None:
         user_input = input("You: ").strip()
         if user_input.lower() in ("quit", "exit"):
             break
-        response = await agent.run(user_msg=user_input)
+        response = await agent.run(user_msg=user_input, max_iterations=3)
         print(f"Agent: {response}\n")
 
 def main() -> None:
@@ -40,6 +40,7 @@ def main() -> None:
     sub.add_parser("chat",   help="Interactive CLI chat")
     sub.add_parser("ingest", help="Ingest new documents without starting the server")
     args = parser.parse_args()
+
 
     if args.command == "serve" or args.command is None:
         uvicorn.run("src.fastapi_app:app", host="0.0.0.0", port=8000, reload=cfg.debug)

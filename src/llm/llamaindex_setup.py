@@ -4,15 +4,12 @@ import logging
 from typing import Sequence
 
 from llama_index.core import Settings
-from llama_index.core.agent.workflow import FunctionAgent
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.query_engine import BaseQueryEngine
-from llama_index.core.tools import QueryEngineTool, ToolMetadata
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.embeddings.ollama import OllamaEmbedding
 
 from src.config import LlmSettings, EmbedderSettings
-from src.llm import build_llm
+from src.llm.llm_factory import build_llm
 from src.providers import EmbeddingProvider
 
 log = logging.getLogger(__name__)
@@ -60,12 +57,12 @@ def _build_llm(settings: LlmSettings):
             provider=settings.provider,
             model=settings.model,
             # API key falls back to env var inside build_llm if not set on cfg.
-            api_key=getattr(settings, f"{settings.provider}_api_key", None),
+            api_key=settings.api_key,
             # Ollama-specific kwargs — ignored by other providers via **kwargs.
-            base_url=getattr(settings, "ollama_base_url", None),
-            request_timeout=getattr(settings, "request_timeout_s", None),
-            context_window=getattr(settings, "context_window", None),
-            temperature=getattr(settings, "temperature", None),
+            base_url=settings.base_url,
+            request_timeout=settings.request_timeout,
+            context_window=settings.context_window,
+            temperature=settings.temperature,
         )
     except ValueError as e:
         raise LLMConfigurationError(str(e)) from e
@@ -75,8 +72,8 @@ def _build_embedding_model(embedder_settings: EmbedderSettings):
     """Build the embedding model based on configured provider."""
     try:
         if embedder_settings.provider == EmbeddingProvider.OLLAMA:
-            log.info("Building Ollama embeddings at %s...", embedder_settings.ollama_base_url)
-            return OllamaEmbedding(model=embedder_settings.model, base_url=embedder_settings.ollama_base_url)
+            log.info("Building Ollama embeddings at %s...", embedder_settings.base_url)
+            return OllamaEmbedding(model=embedder_settings.model, base_url=embedder_settings.base_url)
         elif embedder_settings.provider == EmbeddingProvider.HUGGINGFACE:
             log.info("Building HuggingFace embeddings: %s...", embedder_settings.model)
             return HuggingFaceEmbedding(model_name=embedder_settings.model)

@@ -5,11 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LLM Agent</title>
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -23,101 +19,92 @@
         header {
             background: #1a1a2e;
             color: white;
-            padding: 1rem 1.5rem;
+            padding: 0.75rem 1.5rem;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 1rem;
         }
 
-        header h1 {
-            font-size: 1.2rem;
-            font-weight: 600;
+        header h1 { font-size: 1.1rem; font-weight: 600; white-space: nowrap; }
+
+        nav { display: flex; gap: 0.25rem; }
+
+        .nav-btn {
+            background: transparent;
+            color: #aaa;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            padding: 0.35rem 0.75rem;
+            font-size: 0.82rem;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
         }
+
+        .nav-btn:hover { color: white; border-color: #444; }
+        .nav-btn.active { color: white; background: #2d2d4e; border-color: #4a4a7a; }
 
         #status-indicator {
             display: flex;
             align-items: center;
             gap: 0.5rem;
-            font-size: 0.85rem;
+            font-size: 0.82rem;
             color: #aaa;
+            white-space: nowrap;
         }
 
         #status-dot {
-            width: 8px;
-            height: 8px;
+            width: 7px; height: 7px;
             border-radius: 50%;
             background: #555;
+            flex-shrink: 0;
         }
 
-        #status-dot.healthy { background: #4caf50; }
+        #status-dot.healthy  { background: #4caf50; }
         #status-dot.unhealthy { background: #f44336; }
 
-        #chat-container {
+        .panel { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+        .panel.active { display: flex; }
+
+        /* ── Chat panel ── */
+        #chat-messages {
             flex: 1;
             overflow-y: auto;
-            padding: 1.5rem;
+            padding: 1.25rem 1.5rem;
             display: flex;
             flex-direction: column;
-            gap: 1rem;
+            gap: 0.75rem;
         }
 
         .message {
             max-width: 75%;
-            padding: 0.75rem 1rem;
+            padding: 0.7rem 1rem;
             border-radius: 12px;
-            line-height: 1.5;
-            font-size: 0.95rem;
+            line-height: 1.55;
+            font-size: 0.92rem;
             white-space: pre-wrap;
             word-break: break-word;
         }
 
-        .message.user {
-            background: #1a1a2e;
-            color: white;
-            align-self: flex-end;
-            border-bottom-right-radius: 4px;
-        }
-
-        .message.agent {
-            background: white;
-            color: #333;
-            align-self: flex-start;
-            border-bottom-left-radius: 4px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-
-        .message.error {
-            background: #fff3f3;
-            color: #c62828;
-            align-self: flex-start;
-            border-left: 3px solid #f44336;
-            border-bottom-left-radius: 4px;
-        }
-
-        .message.system {
-            background: #f0f4ff;
-            color: #555;
-            align-self: center;
-            font-size: 0.85rem;
-            font-style: italic;
-            max-width: 90%;
-            text-align: center;
-        }
+        .message.user  { background: #1a1a2e; color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
+        .message.agent { background: white; color: #333; align-self: flex-start; border-bottom-left-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+        .message.error { background: #fff3f3; color: #c62828; align-self: flex-start; border-left: 3px solid #f44336; border-bottom-left-radius: 4px; }
+        .message.system { background: #f0f4ff; color: #555; align-self: center; font-size: 0.82rem; font-style: italic; max-width: 90%; text-align: center; }
 
         .typing-indicator {
             display: none;
             align-self: flex-start;
             background: white;
-            padding: 0.75rem 1rem;
+            padding: 0.7rem 1rem;
             border-radius: 12px;
             border-bottom-left-radius: 4px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         }
 
         .typing-indicator span {
             display: inline-block;
-            width: 8px;
-            height: 8px;
+            width: 7px; height: 7px;
             background: #aaa;
             border-radius: 50%;
             margin: 0 2px;
@@ -129,53 +116,10 @@
 
         @keyframes bounce {
             0%, 60%, 100% { transform: translateY(0); }
-            30% { transform: translateY(-6px); }
+            30% { transform: translateY(-5px); }
         }
 
-        #input-area {
-            background: white;
-            border-top: 1px solid #e0e0e0;
-            padding: 1rem 1.5rem;
-            display: flex;
-            gap: 0.75rem;
-            align-items: flex-end;
-        }
-
-        #message-input {
-            flex: 1;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 0.65rem 0.9rem;
-            font-size: 0.95rem;
-            font-family: inherit;
-            resize: none;
-            min-height: 42px;
-            max-height: 120px;
-            outline: none;
-            transition: border-color 0.2s;
-            overflow-y: auto;
-        }
-
-        #message-input:focus {
-            border-color: #1a1a2e;
-        }
-
-        #send-btn {
-            background: #1a1a2e;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            padding: 0.65rem 1.2rem;
-            font-size: 0.95rem;
-            cursor: pointer;
-            transition: background 0.2s, opacity 0.2s;
-            white-space: nowrap;
-        }
-
-        #send-btn:hover { background: #2d2d4e; }
-        #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-        #toolbar {
+        .chat-toolbar {
             display: flex;
             gap: 0.5rem;
             padding: 0.5rem 1.5rem;
@@ -187,56 +131,251 @@
             background: none;
             border: 1px solid #ddd;
             border-radius: 6px;
-            padding: 0.3rem 0.75rem;
-            font-size: 0.8rem;
+            padding: 0.28rem 0.7rem;
+            font-size: 0.78rem;
             cursor: pointer;
             color: #555;
-            transition: background 0.2s, border-color 0.2s;
+            transition: background 0.15s;
         }
 
-        .toolbar-btn:hover {
-            background: #f5f5f5;
-            border-color: #bbb;
+        .toolbar-btn:hover { background: #f5f5f5; }
+
+        .chat-input-area {
+            background: white;
+            border-top: 1px solid #e0e0e0;
+            padding: 0.9rem 1.5rem;
+            display: flex;
+            gap: 0.75rem;
+            align-items: flex-end;
         }
+
+        textarea {
+            flex: 1;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 0.6rem 0.85rem;
+            font-size: 0.92rem;
+            font-family: inherit;
+            resize: none;
+            min-height: 40px;
+            max-height: 120px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        textarea:focus { border-color: #1a1a2e; }
+
+        .send-btn {
+            background: #1a1a2e;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 0.6rem 1.1rem;
+            font-size: 0.92rem;
+            cursor: pointer;
+            transition: background 0.15s, opacity 0.15s;
+            white-space: nowrap;
+        }
+
+        .send-btn:hover { background: #2d2d4e; }
+        .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* ── Generic endpoint panel ── */
+        .endpoint-panel {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.25rem 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .field-group { display: flex; flex-direction: column; gap: 0.4rem; }
+
+        label { font-size: 0.82rem; color: #666; font-weight: 500; }
+
+        input[type="text"], input[type="number"], input[type="url"], .ep-textarea {
+            width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 0.55rem 0.85rem;
+            font-size: 0.9rem;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        input:focus, .ep-textarea:focus { border-color: #1a1a2e; }
+
+        .ep-textarea { resize: vertical; min-height: 80px; }
+
+        .ep-btn {
+            align-self: flex-start;
+            background: #1a1a2e;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 0.6rem 1.3rem;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: background 0.15s, opacity 0.15s;
+        }
+
+        .ep-btn:hover { background: #2d2d4e; }
+        .ep-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .result-box {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 1rem 1.1rem;
+            font-size: 0.88rem;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-word;
+            display: none;
+        }
+
+        .result-box.visible { display: block; }
+        .result-box.error { border-color: #f44336; background: #fff3f3; color: #c62828; }
+        .result-box.success { border-color: #4caf50; }
+
+        .result-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #999;
+            margin-bottom: 0.35rem;
+        }
+
+        .spinner {
+            display: none;
+            width: 18px; height: 18px;
+            border: 2px solid #ddd;
+            border-top-color: #1a1a2e;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+
+        .spinner.visible { display: inline-block; }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .row { display: flex; align-items: center; gap: 0.75rem; }
     </style>
 </head>
 <body>
 
 <header>
-    <h1>🤖 LLM Agent</h1>
+    <h1>LLM Agent</h1>
+    <nav id="nav">
+        <button class="nav-btn active" onclick="showPanel('chat', this)">Chat</button>
+        <button class="nav-btn" onclick="showPanel('analyze', this)">Analyze URL</button>
+        <button class="nav-btn" onclick="showPanel('evaluate', this)">Evaluate</button>
+        <button class="nav-btn" onclick="showPanel('chat-eval', this)">Chat + Eval</button>
+    </nav>
     <div id="status-indicator">
         <div id="status-dot"></div>
         <span id="status-text">Checking...</span>
     </div>
 </header>
 
-<div id="chat-container">
-    <div class="message system">Agent is ready. Ask anything.</div>
-    <div class="typing-indicator" id="typing">
-        <span></span><span></span><span></span>
+<!-- ── Chat panel ── -->
+<div id="panel-chat" class="panel active">
+    <div id="chat-messages">
+        <div class="message system">Agent is ready. Ask anything.</div>
+        <div class="typing-indicator" id="typing">
+            <span></span><span></span><span></span>
+        </div>
+    </div>
+    <div class="chat-toolbar">
+        <button class="toolbar-btn" onclick="clearChat()">Clear chat</button>
+    </div>
+    <div class="chat-input-area">
+        <textarea id="chat-input" placeholder="Type a message..." rows="1"
+            onkeydown="chatKey(event)" oninput="autoResize(this)"></textarea>
+        <button class="send-btn" id="chat-send" onclick="sendChat()">Send</button>
     </div>
 </div>
 
-<div id="toolbar">
-    <button class="toolbar-btn" onclick="clearChat()">Clear chat</button>
+<!-- ── Analyze URL panel ── -->
+<div id="panel-analyze" class="panel">
+    <div class="endpoint-panel">
+        <div class="field-group">
+            <label>URL</label>
+            <input type="url" id="analyze-url" placeholder="https://example.com">
+        </div>
+        <div class="field-group">
+            <label>Time limit (days, optional)</label>
+            <input type="number" id="analyze-days" placeholder="e.g. 30" min="1">
+        </div>
+        <div class="row">
+            <button class="ep-btn" id="analyze-btn" onclick="runAnalyze()">Analyze</button>
+            <div class="spinner" id="analyze-spin"></div>
+        </div>
+        <div>
+            <div class="result-label">Result</div>
+            <div class="result-box" id="analyze-result"></div>
+        </div>
+    </div>
 </div>
 
-<div id="input-area">
-    <textarea
-        id="message-input"
-        placeholder="Type a message..."
-        rows="1"
-        onkeydown="handleKey(event)"
-        oninput="autoResize(this)"
-    ></textarea>
-    <button id="send-btn" onclick="sendMessage()">Send</button>
+<!-- ── Evaluate panel ── -->
+<div id="panel-evaluate" class="panel">
+    <div class="endpoint-panel">
+        <div class="field-group">
+            <label>Question</label>
+            <input type="text" id="eval-question" placeholder="What question was asked?">
+        </div>
+        <div class="field-group">
+            <label>Answer to evaluate</label>
+            <textarea class="ep-textarea" id="eval-answer" placeholder="Paste the answer you want to evaluate..."></textarea>
+        </div>
+        <div class="row">
+            <button class="ep-btn" id="eval-btn" onclick="runEvaluate()">Evaluate</button>
+            <div class="spinner" id="eval-spin"></div>
+        </div>
+        <div>
+            <div class="result-label">Evaluation result</div>
+            <div class="result-box" id="eval-result"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Chat + Evaluate panel ── -->
+<div id="panel-chat-eval" class="panel">
+    <div class="endpoint-panel">
+        <div class="field-group">
+            <label>Message</label>
+            <input type="text" id="chateval-message" placeholder="Ask something...">
+        </div>
+        <div class="row">
+            <button class="ep-btn" id="chateval-btn" onclick="runChatEval()">Send + Evaluate</button>
+            <div class="spinner" id="chateval-spin"></div>
+        </div>
+        <div>
+            <div class="result-label">Answer</div>
+            <div class="result-box" id="chateval-answer"></div>
+        </div>
+        <div>
+            <div class="result-label">Evaluation</div>
+            <div class="result-box" id="chateval-eval"></div>
+        </div>
+    </div>
 </div>
 
 <script>
-    const chatContainer = document.getElementById("chat-container");
-    const input = document.getElementById("message-input");
-    const sendBtn = document.getElementById("send-btn");
-    const typing = document.getElementById("typing");
+    // ---------------------------------------------------------------------------
+    // Navigation
+    // ---------------------------------------------------------------------------
+
+    function showPanel(name, btn) {
+        document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+        document.querySelectorAll(".nav-btn").forEach(b => b.classList.remove("active"));
+        document.getElementById("panel-" + name).classList.add("active");
+        btn.classList.add("active");
+    }
 
     // ---------------------------------------------------------------------------
     // Health check
@@ -248,13 +387,8 @@
         try {
             const res = await fetch("/health");
             const data = await res.json();
-            if (data.agent_responsive) {
-                dot.className = "healthy";
-                text.textContent = "Online";
-            } else {
-                dot.className = "unhealthy";
-                text.textContent = "Degraded";
-            }
+            dot.className = data.agent_responsive ? "healthy" : "unhealthy";
+            text.textContent = data.agent_responsive ? "Online" : "Degraded";
         } catch {
             dot.className = "unhealthy";
             text.textContent = "Offline";
@@ -268,79 +402,191 @@
     // Chat
     // ---------------------------------------------------------------------------
 
+    const chatMessages = document.getElementById("chat-messages");
+    const typing = document.getElementById("typing");
+    const chatSend = document.getElementById("chat-send");
+    const chatInput = document.getElementById("chat-input");
+
     function appendMessage(text, role) {
-        // Move typing indicator to bottom before inserting message
-        chatContainer.removeChild(typing);
-
+        chatMessages.removeChild(typing);
         const el = document.createElement("div");
-        el.className = `message ${role}`;
+        el.className = "message " + role;
         el.textContent = text;
-        chatContainer.appendChild(el);
-        chatContainer.appendChild(typing);
-        chatContainer.scrollTop = chatContainer.scrollHeight;
+        chatMessages.appendChild(el);
+        chatMessages.appendChild(typing);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
-    function setLoading(loading) {
-        sendBtn.disabled = loading;
-        input.disabled = loading;
-        typing.style.display = loading ? "block" : "none";
-        chatContainer.scrollTop = chatContainer.scrollHeight;
+    function setChatLoading(on) {
+        chatSend.disabled = on;
+        chatInput.disabled = on;
+        typing.style.display = on ? "block" : "none";
+        chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
-    async function sendMessage() {
-        const message = input.value.trim();
-        if (!message) return;
-
-        appendMessage(message, "user");
-        input.value = "";
-        autoResize(input);
-        setLoading(true);
-
+    async function sendChat() {
+        const msg = chatInput.value.trim();
+        if (!msg) return;
+        appendMessage(msg, "user");
+        chatInput.value = "";
+        autoResize(chatInput);
+        setChatLoading(true);
         try {
             const res = await fetch("/chat", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message }),
+                body: JSON.stringify({ message: msg }),
             });
-
             if (!res.ok) {
                 const err = await res.json();
-                appendMessage(`Error: ${err.detail ?? "Unknown error"}`, "error");
-                return;
+                appendMessage("Error: " + (err.detail ?? "Unknown error"), "error");
+            } else {
+                const data = await res.json();
+                appendMessage(data.response, "agent");
             }
-
-            const data = await res.json();
-            appendMessage(data.response, "agent");
-        } catch (err) {
-            appendMessage(`Network error: ${err.message}`, "error");
+        } catch (e) {
+            appendMessage("Network error: " + e.message, "error");
         } finally {
-            setLoading(false);
-            input.focus();
+            setChatLoading(false);
+            chatInput.focus();
         }
     }
 
     async function clearChat() {
-        try {
-            await fetch("/clear", { method: "POST" });
-        } catch { /* best effort */ }
-
-        // Remove all messages except the typing indicator
-        [...chatContainer.children].forEach(el => {
-            if (el !== typing) chatContainer.removeChild(el);
+        try { await fetch("/clear", { method: "POST" }); } catch {}
+        [...chatMessages.children].forEach(el => {
+            if (el !== typing) chatMessages.removeChild(el);
         });
         appendMessage("Conversation cleared. Ask anything.", "system");
     }
 
+    function chatKey(e) {
+        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+    }
+
     // ---------------------------------------------------------------------------
-    // Input helpers
+    // Analyze URL
     // ---------------------------------------------------------------------------
 
-    function handleKey(e) {
-        // Send on Enter, newline on Shift+Enter
-        if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
+    async function runAnalyze() {
+        const url = document.getElementById("analyze-url").value.trim();
+        const days = document.getElementById("analyze-days").value.trim();
+        if (!url) return;
+        setLoading("analyze", true);
+        showResult("analyze-result", "", false, false);
+        try {
+            const body = { url };
+            if (days) body.time_limit_days = parseInt(days);
+            const res = await fetch("/analyze", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json();
+            if (!res.ok) showResult("analyze-result", "Error: " + (data.detail ?? res.statusText), false, true);
+            else showResult("analyze-result", data.analysis, true, false);
+        } catch (e) {
+            showResult("analyze-result", "Network error: " + e.message, false, true);
+        } finally {
+            setLoading("analyze", false);
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Evaluate
+    // ---------------------------------------------------------------------------
+
+    async function runEvaluate() {
+        const question = document.getElementById("eval-question").value.trim();
+        const answer = document.getElementById("eval-answer").value.trim();
+        if (!question || !answer) return;
+        setLoading("eval", true);
+        showResult("eval-result", "", false, false);
+        try {
+            const res = await fetch("/evaluate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ question, answer }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                showResult("eval-result", "Error: " + (data.detail ?? res.statusText), false, true);
+            } else {
+                showResult("eval-result", formatEval(data.evaluation), true, false);
+            }
+        } catch (e) {
+            showResult("eval-result", "Network error: " + e.message, false, true);
+        } finally {
+            setLoading("eval", false);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Chat + Evaluate
+    // ---------------------------------------------------------------------------
+
+    async function runChatEval() {
+        const msg = document.getElementById("chateval-message").value.trim();
+        if (!msg) return;
+        setLoading("chateval", true);
+        showResult("chateval-answer", "", false, false);
+        showResult("chateval-eval", "", false, false);
+        try {
+            const res = await fetch("/chat_and_evaluate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: msg }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                showResult("chateval-answer", "Error: " + (data.detail ?? res.statusText), false, true);
+            } else {
+                showResult("chateval-answer", data.answer, true, false);
+                showResult("chateval-eval", formatEval(data.evaluation), true, false);
+            }
+        } catch (e) {
+            showResult("chateval-answer", "Network error: " + e.message, false, true);
+        } finally {
+            setLoading("chateval", false);
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------
+
+    function setLoading(prefix, on) {
+        document.getElementById(prefix + "-btn").disabled = on;
+        const spin = document.getElementById(prefix + "-spin");
+        if (spin) spin.className = "spinner" + (on ? " visible" : "");
+    }
+
+    function showResult(id, text, success, error) {
+        const el = document.getElementById(id);
+        el.textContent = text;
+        el.className = "result-box" + (text ? " visible" : "") +
+            (success ? " success" : "") + (error ? " error" : "");
+    }
+
+    function formatEval(evaluation) {
+        if (!evaluation || typeof evaluation !== "object") return String(evaluation);
+        const lines = [];
+        if (evaluation.passing !== undefined)
+            lines.push("Overall: " + (evaluation.passing ? "PASS" : "FAIL"));
+        if (evaluation.faithfulness)
+            lines.push("\nFaithfulness\n  Score: " + (evaluation.faithfulness.score ?? "n/a") +
+                "\n  " + (evaluation.faithfulness.feedback ?? ""));
+        if (evaluation.relevancy)
+            lines.push("\nRelevancy\n  Score: " + (evaluation.relevancy.score ?? "n/a") +
+                "\n  " + (evaluation.relevancy.feedback ?? ""));
+        if (evaluation.guidelines?.length) {
+            lines.push("\nGuidelines");
+            evaluation.guidelines.forEach((g, i) => {
+                lines.push("  [" + (i + 1) + "] " + (g.passing ? "pass" : "fail") +
+                    " — " + (g.feedback ?? ""));
+            });
+        }
+        return lines.join("\n").trim();
     }
 
     function autoResize(el) {

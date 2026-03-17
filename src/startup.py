@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import logging
 
-from llama_index.core.agent.workflow import FunctionAgent, Eva
+from llama_index.core.agent.workflow import FunctionAgent
+from llama_index.core.base.base_query_engine import BaseQueryEngine
 
 from dataclasses import dataclass
 
 
-from src.agent_setup import build_rag_agent, build_evaluator_agent, build_generic_tools
-from src.llm import configure_llamaindex
+from src.agent_setup import build_rag_agent, build_generic_tools
+from src.llm import configure_llamaindex, build_llm
 from src.config import CONFIG as cfg
 from src.indexing import IndexManager, ChromaIndexManager
 from src.logging_setup import setup_logging
-from src.models import EvaluationResult
+from src.evaluation import build_evaluator, EvaluatorBundle
 
 log = logging.getLogger(__name__)
 
@@ -20,7 +21,9 @@ log = logging.getLogger(__name__)
 @dataclass
 class BootstrapResult:
     agent: FunctionAgent
-    evaluator: FunctionAgent | None = None
+    query_engine: BaseQueryEngine
+    evaluator_bundle: EvaluatorBundle | None = None
+    
 
 def _setup_logging() -> None:
     setup_logging(
@@ -83,11 +86,11 @@ def bootstrap() -> BootstrapResult:
 
     manager, chroma = _build_managers()
 
-    if cfg.auto_ingest and chroma.ingested_count() == 0:
+    if cfg.auto_ingest and manager.ingested_count() == 0:
         log.info("Index is empty and auto_ingest is enabled — ingesting now...")
         _run_ingest(manager, chroma)
 
-    if chroma.ingested_count() == 0:
+    if manager.ingested_count() == 0:
         log.warning(
             "ChromaDB collection is empty. The agent will have no documents to search. "
             "Add documents to %s and run ingest.", cfg.raw_dir
@@ -101,13 +104,9 @@ def bootstrap() -> BootstrapResult:
     )
     
     agent = build_rag_agent(query_engine=query_engine, extra_tools=tools, memory_token_limit=cfg.memory_token_limit)
-    evaluator = None
+    evaluator_bundle = None
     if cfg.judge_llm_settings:
-        judge_llm = configure_llamaindex(cfg.judge_llm_settings, cfg.embedder_settings)
-        evaluator = build_evaluator_agent(
-            query_engine=query_engine, 
-            llm=judge_llm, 
-            memory_token_limit=cfg.memory_token_limit,
-            output_cls = EvaluationResult)
+        judge_llm = build_llm(cfg.judge_llm_settings)
+        evaluator_bundle = build_evaluator(judge_llm)
     log.info("Agent ready.")
-    return BootstrapResult(agent=agent, evaluator=evaluator)
+    return BootstrapResult(agent=agent, evaluator_bundle=evaluator_bundle, query_engine=query_engine)

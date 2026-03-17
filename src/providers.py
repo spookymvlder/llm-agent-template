@@ -1,11 +1,11 @@
-from enum import StrEnum
+from enum import Enum, auto, StrEnum
 
 class LLMProvider(StrEnum):
-    OPENAI     = "openai"
-    ANTHROPIC  = "anthropic"
-    GEMINI     = "gemini"
-    OLLAMA     = "ollama"
+    OPENAI     = auto()
+    ANTHROPIC  = auto()
+    GEMINI     = auto()
+    OLLAMA     = auto()
 
 class EmbeddingProvider(StrEnum):
-    HUGGINGFACE = "huggingface"
-    OLLAMA      = "ollama"
+    HUGGINGFACE = auto()
+    OLLAMA      = auto()

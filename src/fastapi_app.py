@@ -5,35 +5,49 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-
-from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
+from fastapi.templating import Jinja2Templates
 
+from src.evaluation import EvaluatorBundle, evaluate_response
+from src.models import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    ChatEvalResponse,
+    ChatRequest,
+    ChatResponse,
+    EvaluateRequest,
+    EvaluateResponse,
+    HealthResponse,
+)
 from src.startup import bootstrap
-from src.models import ChatRequest, ChatResponse, AnalyzeRequest, AnalyzeResponse, HealthResponse, EvaluateRequest, EvaluateResponse, ChatEvalResponse
 
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Schema
-# ---------------------------------------------------------------------------
-
-
-
-# ---------------------------------------------------------------------------
-# Lifespan — replaces @app.before_first_request / teardown
+# Application state
 # ---------------------------------------------------------------------------
 
 agent = None
-evaluator = None
+query_engine = None
+evaluator_bundle: EvaluatorBundle | None = None
+
+# ---------------------------------------------------------------------------
+# Lifespan
+# ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, evaluator
+    global agent, query_engine, evaluator_bundle
     result = bootstrap()
     agent = result.agent
-    evaluator = result.evaluator
+    query_engine = result.query_engine
+    evaluator_bundle = result.evaluator_bundle
+    log.info(
+        "Startup complete. evaluator=%s",
+        "enabled" if evaluator_bundle else "disabled",
+    )
     yield
+    log.info("Shutting down.")
 
 # ---------------------------------------------------------------------------
 # App
@@ -53,20 +67,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+templates = Jinja2Templates(directory="templates")
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
-templates = Jinja2Templates(directory="templates")
 
 @app.get("/")
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
-    
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     try:
-        test = await agent.run("Hello")
-        return HealthResponse(status="healthy", agent_responsive=True, message=str(test))
+        test = await agent.run(user_msg="Hello")
+        return HealthResponse(
+            status="healthy",
+            agent_responsive=True,
+            message=str(test),
+        )
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
 
@@ -76,7 +96,7 @@ async def chat(body: ChatRequest):
     if not body.message.strip():
         raise HTTPException(status_code=422, detail="Message cannot be empty.")
     try:
-        response = await agent.run(body.message)
+        response = await agent.run(user_msg=body.message, max_iterations=5)
         return ChatResponse(response=str(response))
     except Exception as e:
         log.exception("Chat error")
@@ -85,63 +105,58 @@ async def chat(body: ChatRequest):
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_url(body: AnalyzeRequest):
-    if body.time_limit_days:
-        prompt = f"Analyze this URL focusing on the last {body.time_limit_days} days: {body.url}"
-    else:
-        prompt = f"Using the media analyzer tool, extract themes from this content: {body.url}"
+    prompt = (
+        f"Analyze this URL focusing on the last {body.time_limit_days} days: {body.url}"
+        if body.time_limit_days
+        else f"Using the media analyzer tool, extract themes from this content: {body.url}"
+    )
     try:
-        response = await agent.run(user_msg=prompt)
+        response = await agent.run(user_msg=prompt, max_iterations=5)
         return AnalyzeResponse(url=body.url, analysis=str(response))
     except Exception as e:
         log.exception("URL analysis error")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/evaluate", response_model=EvaluateResponse)
 async def evaluate(body: EvaluateRequest):
-    if evaluator is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Evaluator is not configured. Set JUDGE_PROVIDER and JUDGE_MODEL in your .env file."
-        )
-    prompt = (
-        f"Please evaluate the following response to a user question.\n\n"
-        f"Question: {body.question}\n"
-        f"Response: {body.answer}\n\n"
-        f"Use the retrieve_source_documents tool to fetch relevant context "
-        f"from the document corpus before making your assessment."
-    )
+    _require_evaluator()
     try:
-        result = await evaluator.run(user_msg=prompt)
+        # Query the index directly to get a Response object with source_nodes.
+        rag_response = query_engine.query(body.question)
+        eval_result = await evaluate_response(
+            bundle=evaluator_bundle,
+            query=body.question,
+            response=rag_response,
+        )
         return EvaluateResponse(
             question=body.question,
             answer=body.answer,
-            evaluation=str(result),
+            evaluation=eval_result.summary(),
         )
     except Exception as e:
         log.exception("Evaluation error")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.post("/chat_and_evaluate", response_model=ChatEvalResponse)
 async def chat_and_evaluate(body: ChatRequest):
-    if evaluator is None:
-        raise HTTPException(status_code=503, detail="Evaluator is not configured.")
+    _require_evaluator()
     try:
-        answer = await agent.run(user_msg=body.message)
-        answer_str = str(answer)
+        # Use query_engine directly to preserve source_nodes for evaluation.
+        rag_response = query_engine.query(body.message)
+        answer_str = str(rag_response)
 
-        prompt = (
-            f"Please evaluate the following response to a user question.\n\n"
-            f"Question: {body.message}\n"
-            f"Response: {answer_str}\n\n"
-            f"Use the retrieve_source_documents tool to fetch relevant context "
-            f"before making your assessment."
+        eval_result = await evaluate_response(
+            bundle=evaluator_bundle,
+            query=body.message,
+            response=rag_response,
         )
-        evaluation = await evaluator.run(user_msg=prompt)
 
         return ChatEvalResponse(
             question=body.message,
             answer=answer_str,
-            evaluation=str(evaluation),
+            evaluation=eval_result.summary(),
         )
     except Exception as e:
         log.exception("Chat and evaluate error")
@@ -156,9 +171,26 @@ async def clear_conversation():
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _require_evaluator() -> None:
+    """Raise 503 if the evaluator bundle is not configured."""
+    if evaluator_bundle is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Evaluator is not configured. "
+                "Set JUDGE_PROVIDER and JUDGE_MODEL in your .env file."
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("fastapi_app:app", host="0.0.0.0", port=8000, reload=True)
+    # TODO update reload to be a flag.
+    uvicorn.run("src.fastapi_app:app", host="0.0.0.0", port=8000, reload=True)
