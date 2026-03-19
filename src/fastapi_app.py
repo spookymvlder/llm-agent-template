@@ -25,6 +25,9 @@ from src.models import (
 )
 from src.startup import bootstrap
 
+
+
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -34,6 +37,7 @@ log = logging.getLogger(__name__)
 agent = None
 query_engine = None
 evaluator_bundle: EvaluatorBundle | None = None
+memory = None                   # built after bootstrap
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -41,12 +45,13 @@ evaluator_bundle: EvaluatorBundle | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, query_engine, evaluator_bundle, max_iterations
+    global agent, query_engine, evaluator_bundle, max_iterations, memory
     result = bootstrap()
     agent = result.agent
     query_engine = result.query_engine
     evaluator_bundle = result.evaluator_bundle
     max_iterations = result.max_iterations
+    memory = result.memory
     log.info(
         "Startup complete. evaluator=%s",
         "enabled" if evaluator_bundle else "disabled",

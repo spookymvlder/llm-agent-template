@@ -23,18 +23,23 @@ log = logging.getLogger(__name__)
 async def chat() -> None:
     """
     Interactive CLI chat against the agent.
-    
+
     Requires main to be run with command line argument 'chat'.
     """
-    response = bootstrap()
-    agent = response.agent
-    
+    result = bootstrap()
+    agent = result.agent
+    memory = result.memory
+
     print("Chat started. Type 'quit' to exit.\n")
     while True:
         user_input = input("You: ").strip()
         if user_input.lower() in ("quit", "exit"):
             break
-        response = await agent.run(user_msg=user_input, max_iterations=3)
+        response = await agent.run(
+            user_msg=user_input,
+            max_iterations=result.max_iterations,
+            memory=memory,
+        )
         print(f"Agent: {response}\n")
 
 def main() -> None:

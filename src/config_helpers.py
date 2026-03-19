@@ -110,3 +110,6 @@ class RetrievalSettings:
     collection_name: str
     distance_metric: str
     memory_token_limit: int
+    max_iterations: int
+    enable_fact_extraction: bool
+    max_facts: int
