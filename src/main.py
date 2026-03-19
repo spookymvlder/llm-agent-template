@@ -58,7 +58,7 @@ def main() -> None:
 
 
     if args.command == "--serve" or args.command is None:
-        uvicorn.run("src.fastapi_app:app", host="0.0.0.0", port=8000, reload=cfg.debug)
+        uvicorn.run("src.fastapi_app:app", host="127.0.0.1", port=8000, reload=cfg.debug)
     # TODO disable evaluator from chat.
     elif args.command == "--chat":
         asyncio.run(chat())

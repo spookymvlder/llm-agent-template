@@ -7,6 +7,10 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.templating import Jinja2Templates
+from fastapi.sse import EventSourceResponse, ServerSentEvent
+
+from llama_index.core.agent.workflow import AgentStream
+from sse_starlette.sse import EventSourceResponse
 
 from src.evaluation import EvaluatorBundle, evaluate_response
 from src.models import (
@@ -37,11 +41,12 @@ evaluator_bundle: EvaluatorBundle | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, query_engine, evaluator_bundle
+    global agent, query_engine, evaluator_bundle, max_iterations
     result = bootstrap()
     agent = result.agent
     query_engine = result.query_engine
     evaluator_bundle = result.evaluator_bundle
+    max_iterations = result.max_iterations
     log.info(
         "Startup complete. evaluator=%s",
         "enabled" if evaluator_bundle else "disabled",
@@ -93,14 +98,33 @@ async def health_check():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(body: ChatRequest):
+    """Non-streaming chat. Useful for programmatic clients and testing."""
     if not body.message.strip():
         raise HTTPException(status_code=422, detail="Message cannot be empty.")
     try:
-        response = await agent.run(user_msg=body.message, max_iterations=5)
+        response = await agent.run(user_msg=body.message, max_iterations=max_iterations)
         return ChatResponse(response=str(response))
     except Exception as e:
         log.exception("Chat error")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/chat/stream")
+async def chat_stream(body: ChatRequest):
+    """Streaming chat via SSE. Used by the browser UI."""
+    if not body.message.strip():
+        raise HTTPException(status_code=422, detail="Message cannot be empty.")
+
+    async def generate():
+        try:
+            handler = agent.run(user_msg=body.message, max_iterations=max_iterations)
+            async for event in handler.stream_events():
+                if isinstance(event, AgentStream):
+                    yield {"data": event.delta}
+        except Exception as e:
+            log.exception("Chat stream error")
+            yield {"event": "error", "data": str(e)}
+
+    return EventSourceResponse(generate())
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
@@ -111,7 +135,7 @@ async def analyze_url(body: AnalyzeRequest):
         else f"Using the media analyzer tool, extract themes from this content: {body.url}"
     )
     try:
-        response = await agent.run(user_msg=prompt, max_iterations=5)
+        response = await agent.run(user_msg=prompt, max_iterations=max_iterations)
         return AnalyzeResponse(url=body.url, analysis=str(response))
     except Exception as e:
         log.exception("URL analysis error")
@@ -193,4 +217,4 @@ def _require_evaluator() -> None:
 if __name__ == "__main__":
     import uvicorn
     # TODO update reload to be a flag.
-    uvicorn.run("src.fastapi_app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("src.fastapi_app:app", host="127.0.0.1", port=8000, reload=True)

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from llama_index.llms.openai import OpenAI
-from llama_index.llms.gemini import Gemini
+from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.llms.anthropic import Anthropic
 from llama_index.llms.ollama import Ollama
 
@@ -25,7 +25,7 @@ class _ProviderSpec:
 # Registry — add new providers here, nothing else needs to change.
 _REGISTRY: dict[str, _ProviderSpec] = {
     LLMProvider.OPENAI:  _ProviderSpec(cls=OpenAI,     env_var="OPENAI_API_KEY",     api_key_param="api_key"),
-    LLMProvider.GEMINI:  _ProviderSpec(cls=Gemini,     env_var="GOOGLE_API_KEY",     api_key_param="api_key"),
+    LLMProvider.GEMINI:  _ProviderSpec(cls=GoogleGenAI,     env_var="GOOGLE_API_KEY",     api_key_param="api_key"),
     LLMProvider.ANTHROPIC: _ProviderSpec(cls=Anthropic, env_var="ANTHROPIC_API_KEY", api_key_param="api_key"),
 }
 

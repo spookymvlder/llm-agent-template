@@ -417,6 +417,15 @@
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
+    function appendPartialMessage() {
+        chatMessages.removeChild(typing);
+        const el = document.createElement("div");
+        el.className = "message agent";
+        chatMessages.appendChild(el);
+        chatMessages.appendChild(typing);
+        return el;
+    }
+
     function setChatLoading(on) {
         chatSend.disabled = on;
         chatInput.disabled = on;
@@ -431,18 +440,34 @@
         chatInput.value = "";
         autoResize(chatInput);
         setChatLoading(true);
+
         try {
-            const res = await fetch("/chat", {
+            const res = await fetch("/chat/stream", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ message: msg }),
             });
+
             if (!res.ok) {
                 const err = await res.json();
                 appendMessage("Error: " + (err.detail ?? "Unknown error"), "error");
-            } else {
-                const data = await res.json();
-                appendMessage(data.response, "agent");
+                return;
+            }
+
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            const agentMsg = appendPartialMessage();
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                const chunk = decoder.decode(value);
+                for (const line of chunk.split("\n")) {
+                    if (line.startsWith("data: ")) {
+                        agentMsg.textContent += line.slice(6);
+                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                    }
+                }
             }
         } catch (e) {
             appendMessage("Network error: " + e.message, "error");

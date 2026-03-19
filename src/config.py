@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from enum import StrEnum, auto
 from pathlib import Path
+import logging
 
 import numpy as np
 from dotenv import load_dotenv
@@ -22,6 +23,7 @@ from config_helpers import (
 )
 from providers import EmbeddingProvider, LLMProvider
 
+log = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class AppConfig:
@@ -61,13 +63,16 @@ class AppConfig:
     # LLM
     llm_provider: LLMProvider
     llm_model: str
-    openai_api_key: str | None
-    google_api_key: str | None
-    anthropic_api_key: str | None
+
     ollama_base_url: str
     request_timeout: float
     context_window: int
     temperature: float
+    max_iterations: int
+
+    openai_api_key: str | None
+    google_api_key: str | None
+    anthropic_api_key: str | None
 
     # Judge LLM (optional)
     judge_provider: LLMProvider | None
@@ -106,7 +111,7 @@ class AppConfig:
             base_url=self.ollama_base_url,
             request_timeout=self.request_timeout,
             context_window=self.context_window,
-            temperature=self.temperature,
+            temperature=self.temperature
         )
 
     @property
@@ -129,7 +134,7 @@ class AppConfig:
             base_url=self.ollama_base_url,
             request_timeout=self.request_timeout,
             context_window=self.context_window,
-            temperature=self.temperature,
+            temperature=self.temperature
         )
 
     @property
@@ -163,6 +168,7 @@ class AppConfig:
             collection_name=self.collection_name,
             distance_metric=self.distance_metric,
             memory_token_limit=self.memory_token_limit,
+            max_iterations=self.max_iterations,
         )
 
     @property
@@ -243,6 +249,7 @@ class AppConfig:
             request_timeout=as_float(os.getenv("REQUEST_TIMEOUT"), default=300.0),
             context_window=as_int(os.getenv("CONTEXT_WINDOW"), default=32768),
             temperature=as_float(os.getenv("TEMPERATURE"), default=0.2),
+            memory_token_limit=as_int(os.getenv("MEMORY_TOKEN_LIMI"), default=4096),
 
             # Judge LLM
             judge_provider=optional_provider(os.getenv("JUDGE_PROVIDER")),
@@ -259,15 +266,67 @@ class AppConfig:
             top_k=as_int(os.getenv("RETRIEVAL_TOP_K"), default=5),
             collection_name=os.getenv("COLLECTION_NAME", "documents"),
             distance_metric=os.getenv("DISTANCE_METRIC", "cosine"),
-            memory_token_limit=as_int(os.getenv("MEMORY_TOKEN_LIMIT"), default=4096),
+            max_iterations=as_int(os.getenv("MAX_ITERATIONS"), default=3),
+            
         )
 
         # Ensure all runtime directories exist
         for d in (cfg.raw_dir, cfg.env_dir, cfg.processed_dir, cfg.logs_dir, cfg.chroma_dir):
             d.mkdir(parents=True, exist_ok=True)
 
+        log.debug(cfg.to_log_str())
         return cfg
 
+
+    def to_log_str(self) -> str:
+        """Format config fields for debug logging. Redacts API keys."""
+        def _redact(value: str | None) -> str:
+            if not value:
+                return "not set"
+            return f"{value[:4]}{'*' * (len(value) - 4)}" if len(value) > 4 else "****"
+
+        lines = [
+            "AppConfig:",
+            f"  environment     : {self.environment}",
+            f"  debug           : {self.debug}",
+            f"  auto_ingest     : {self.auto_ingest}",
+            "",
+            f"  project_root    : {self.project_root}",
+            f"  data_dir        : {self.data_dir}",
+            f"  raw_dir         : {self.raw_dir}",
+            f"  env_dir         : {self.env_dir}",
+            f"  chroma_dir      : {self.chroma_dir}",
+            f"  logs_dir        : {self.logs_dir}",
+            "",
+            f"  llm_provider    : {self.llm_provider}",
+            f"  llm_model       : {self.llm_model}",
+            f"  ollama_base_url : {self.ollama_base_url}",
+            f"  context_window  : {self.context_window}",
+            f"  temperature     : {self.temperature}",
+            f"  request_timeout : {self.request_timeout}",
+            "",
+            f"  openai_api_key  : {_redact(self.openai_api_key)}",
+            f"  google_api_key  : {_redact(self.google_api_key)}",
+            f"  anthropic_api_key: {_redact(self.anthropic_api_key)}",
+            "",
+            f"  judge_provider  : {self.judge_provider or 'not set'}",
+            f"  judge_model     : {self.judge_model or 'not set'}",
+            "",
+            f"  embedding_provider: {self.embedding_provider}",
+            f"  embedding_model : {self.embedding_model}",
+            f"  chunk_size      : {self.chunk_size}",
+            "",
+            f"  top_k           : {self.top_k}",
+            f"  collection_name : {self.collection_name}",
+            f"  distance_metric : {self.distance_metric}",
+            f"  memory_token_limit: {self.memory_token_limit}",
+            f"  max_iterations: : {self.max_iterations}",
+            "",
+            f"  enable_logging  : {self.enable_logging}",
+            f"  log_level       : {self.log_level}",
+            f"  log_to_file     : {self.log_to_file}",
+        ]
+        return "\n".join(lines)
 
 # TODO - store state of config after load to log
 CONFIG = AppConfig.load()

@@ -23,6 +23,7 @@ class BootstrapResult:
     agent: FunctionAgent
     query_engine: BaseQueryEngine
     evaluator_bundle: EvaluatorBundle | None = None
+    max_iterations: int
     
 
 def _setup_logging() -> None:
