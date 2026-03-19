@@ -37,6 +37,7 @@ class AppConfig:
         TEST = auto()
         PROD = auto()
 
+    # TODO figure out what parameters can safely be set to None and add as an expected type.
     # General
     seed: int
     rng: np.random.Generator
@@ -89,6 +90,15 @@ class AppConfig:
 
     @property
     def llm_settings(self) -> LlmSettings:
+        """
+        Returns the config values necessary for the application's primary LLM.
+
+        Allows projects that use this as a template to not rely on the config file, but to instead easily 
+        drop in settings based on the needs of their project if these are necessary after initial launch.
+
+        Returns:
+            LlmSettings: A subset of config options necessary to run the primary LLM.
+        """
         return LlmSettings(
             provider=self.llm_provider,
             model=self.llm_model,
@@ -101,6 +111,15 @@ class AppConfig:
 
     @property
     def judge_llm_settings(self) -> LlmSettings | None:
+        """
+        Returns the config values necessary for the application's evaluator LLM.
+
+        Allows projects that use this as a template to not rely on the config file, but to instead easily 
+        drop in settings based on the needs of their project if these are necessary after initial launch.
+
+        Returns:
+            LlmSettings: A subset of config options necessary to run the evaluator LLM.
+        """
         if not self.judge_provider or not self.judge_model:
             return None
         return LlmSettings(
@@ -115,6 +134,15 @@ class AppConfig:
 
     @property
     def embedder_settings(self) -> EmbedderSettings:
+        """
+        Returns the config values necessary for the application's embedder.
+
+        Allows projects that use this as a template to not rely on the config file, but to instead easily 
+        drop in settings based on the needs of their project if these are necessary after initial launch.
+
+        Returns:
+            EmbedderSettings: A subset of config options necessary to run embedding for the application.
+        """
         return EmbedderSettings(
             provider=self.embedding_provider,
             model=self.embedding_model,
@@ -124,6 +152,12 @@ class AppConfig:
 
     @property
     def retrieval_settings(self) -> RetrievalSettings:
+        """
+        Bundle of settings for retrieving data from ChromaDB.
+
+        Returns:
+            RetrievalSettings: A subset of config options necessary for retrieving data from ChromaDB.
+        """
         return RetrievalSettings(
             top_k=self.top_k,
             collection_name=self.collection_name,
@@ -133,6 +167,12 @@ class AppConfig:
 
     @property
     def debug(self) -> bool:
+        """
+        Indicates whether FastAPI should reload or not when code changes.
+
+        Returns:
+            bool: True if dev environment.
+        """
         return self.environment == AppConfig.Environment.DEV
 
     # ---------------------------------------------------------------------------
@@ -229,4 +269,5 @@ class AppConfig:
         return cfg
 
 
+# TODO - store state of config after load to log
 CONFIG = AppConfig.load()
