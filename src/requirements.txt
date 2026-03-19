@@ -1,0 +1,17 @@
+chromadb==1.5.5
+fastapi==0.135.1
+llama-index-core==0.14.18
+llama-index-llms-openai
+llama-index-llms-anthropic
+llama-index-llms-gemini
+llama-index-llms-ollama
+llama-index-embeddings-huggingface
+llama-index-embeddings-ollama
+llama-index-vector-stores-chroma
+numpy==2.4.3
+pandas==3.0.1
+pydantic==2.12.5
+python-dotenv==1.2.2
+uvicorn==0.42.0
+jinja2==3.1.6
+sentence-transformers=5.3.0

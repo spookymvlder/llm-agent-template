@@ -1,4 +1,4 @@
-from enum import Enum, auto, StrEnum
+from enum import auto, StrEnum
 
 class LLMProvider(StrEnum):
     OPENAI     = auto()
