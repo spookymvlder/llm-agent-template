@@ -210,3 +210,10 @@ local/Scripts/pip.exe
 local/Scripts/pip.exe
 local/Scripts/pip3.11.exe
 local/Scripts/pip3.exe
+
+data/raw/*
+data/dev
+data/test
+data/prod
+.vscode/launch.json
+.vscode/launch.json
