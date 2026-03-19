@@ -4,9 +4,11 @@ import logging
 
 from llama_index.core.agent.workflow import FunctionAgent
 from llama_index.core.base.base_query_engine import BaseQueryEngine
+from llama_index.core import Settings
 
 from dataclasses import dataclass
 
+import uuid
 
 from src.agent_setup import build_rag_agent, build_generic_tools
 from src.llm import configure_llamaindex, build_llm
@@ -14,6 +16,7 @@ from src.config import CONFIG as cfg
 from src.indexing import IndexManager, ChromaIndexManager
 from src.logging_setup import setup_logging
 from src.evaluation import build_evaluator, EvaluatorBundle
+from src.agent_setup import build_memory, Memory
 
 log = logging.getLogger(__name__)
 
@@ -22,8 +25,9 @@ log = logging.getLogger(__name__)
 class BootstrapResult:
     agent: FunctionAgent
     query_engine: BaseQueryEngine
-    evaluator_bundle: EvaluatorBundle | None = None
     max_iterations: int
+    memory: Memory
+    evaluator_bundle: EvaluatorBundle | None = None
     
 
 def _setup_logging() -> None:
@@ -104,10 +108,31 @@ def bootstrap() -> BootstrapResult:
         collection_name=cfg.collection_name,
     )
     
-    agent = build_rag_agent(query_engine=query_engine, extra_tools=tools, memory_token_limit=cfg.memory_token_limit)
+    agent = build_rag_agent(query_engine=query_engine, extra_tools=tools)
+    log.info("Agent ready.")
+
+
+
+
     evaluator_bundle = None
     if cfg.judge_llm_settings:
         judge_llm = build_llm(cfg.judge_llm_settings)
         evaluator_bundle = build_evaluator(judge_llm)
-    log.info("Agent ready.")
-    return BootstrapResult(agent=agent, evaluator_bundle=evaluator_bundle, query_engine=query_engine)
+        log.info("Evaluator ready.")
+
+    memory = build_memory(
+        session_id=str(uuid.uuid4()),
+        llm=Settings.llm,           # available here naturally
+        token_limit=cfg.memory_token_limit,
+        enable_fact_extraction=cfg.enable_fact_extraction,
+        max_facts=cfg.max_facts,
+    )
+    
+
+    return BootstrapResult(
+        agent=agent, 
+        evaluator_bundle=evaluator_bundle, 
+        query_engine=query_engine,
+        max_iterations=cfg.max_iterations,
+        memory=memory,
+        )

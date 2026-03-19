@@ -8,7 +8,7 @@ from llama_index.core import Settings
 from llama_index.core.query_engine import BaseQueryEngine
 from llama_index.core.tools import ToolMetadata, QueryEngineTool
 from llama_index.core.agent.workflow import FunctionAgent
-from llama_index.core.memory import ChatMemoryBuffer
+
 
 
 
@@ -42,7 +42,6 @@ def build_rag_agent(
     extra_tools: Sequence = (),
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     rag_tool_description: str = DEFAULT_RAG_TOOL_DESCRIPTION,
-    memory_token_limit: int = 4096,
     output_cls: type[BaseModel] | None = None,
     verbose: bool = True,
 ) -> FunctionAgent:
@@ -76,7 +75,7 @@ def build_rag_agent(
         ),
     )
 
-    memory = ChatMemoryBuffer.from_defaults(token_limit=memory_token_limit)
+
     tools = [rag_tool, *extra_tools]
 
 
@@ -85,7 +84,6 @@ def build_rag_agent(
         tools=tools,
         llm=Settings.llm,
         system_prompt=system_prompt,
-        memory=memory,
         output_cls=output_cls,
         verbose=verbose,
     )

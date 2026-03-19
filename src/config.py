@@ -83,11 +83,15 @@ class AppConfig:
     embedding_model: str
     chunk_size: int
 
+    hf_token: str
+
     # Retrieval
     top_k: int
     collection_name: str
     distance_metric: str
     memory_token_limit: int
+    enable_fact_extraction: bool
+    max_facts: int
 
     # ---------------------------------------------------------------------------
     # Settings properties — typed slices passed to factories
@@ -169,6 +173,8 @@ class AppConfig:
             distance_metric=self.distance_metric,
             memory_token_limit=self.memory_token_limit,
             max_iterations=self.max_iterations,
+            enable_fact_extraction=self.enable_fact_extraction,
+            max_facts=self.max_facts,
         )
 
     @property
@@ -218,6 +224,11 @@ class AppConfig:
 
         seed = as_int(os.getenv("SEED"), default=42)
 
+        # Should be sufficient to simply set in environ, isn't needed by AppConfig.
+        hf_token=optional_str(os.getenv("HF_TOKEN"))
+        if hf_token:
+            os.environ["HF_TOKEN"] = hf_token
+
         cfg = AppConfig(
             # General
             seed=seed,
@@ -261,12 +272,15 @@ class AppConfig:
             ),
             embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5").strip(),
             chunk_size=as_int(os.getenv("CHUNK_SIZE"), default=2048),
+            hf_token=hf_token,
 
             # Retrieval
             top_k=as_int(os.getenv("RETRIEVAL_TOP_K"), default=5),
             collection_name=os.getenv("COLLECTION_NAME", "documents"),
             distance_metric=os.getenv("DISTANCE_METRIC", "cosine"),
             max_iterations=as_int(os.getenv("MAX_ITERATIONS"), default=3),
+            enable_fact_extraction=as_bool(os.getenv("ENABLE_FACT_EXTRACTION"), default=True),
+            max_facts=as_int(os.getenv("MAX_FACTS"), default=50),
             
         )
 
@@ -321,6 +335,8 @@ class AppConfig:
             f"  distance_metric : {self.distance_metric}",
             f"  memory_token_limit: {self.memory_token_limit}",
             f"  max_iterations: : {self.max_iterations}",
+            f"  enable_fact_extraction: {self.enable_fact_extraction}",
+            f"  max_facts       : {self.max_facts}",
             "",
             f"  enable_logging  : {self.enable_logging}",
             f"  log_level       : {self.log_level}",

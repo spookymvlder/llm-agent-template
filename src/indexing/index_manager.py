@@ -33,13 +33,13 @@ class IndexManager:
         data/
           raw/                   # shared, files stay here permanently
           dev/
-            indices/
+            chroma/
             manifest.json
           test/
-            indices/
+            chroma/
             manifest.json
           prod/
-            indices/
+            chroma/
             manifest.json
 
     Typical usage:
@@ -62,7 +62,6 @@ class IndexManager:
         """
         self.raw_dir = raw_dir
         self.env_dir = env_dir
-        self.indices_dir = env_dir / "indices"
         self.manifest_path = env_dir / "manifest.json"
 
     # ------------------------------------------------------------------
@@ -134,7 +133,7 @@ class IndexManager:
         return self.env_dir.name
 
     def _ensure_dirs(self) -> None:
-        for d in (self.raw_dir, self.env_dir, self.indices_dir):
+        for d in (self.raw_dir, self.env_dir):
             d.mkdir(parents=True, exist_ok=True)
 
     def _discover_new_files(self, manifest: set[str]) -> list[Path]:
