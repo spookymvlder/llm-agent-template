@@ -9,7 +9,7 @@ import logging
 import numpy as np
 from dotenv import load_dotenv
 
-from config_helpers import (
+from src.config_helpers import (
     EmbedderSettings,
     LlmSettings,
     RetrievalSettings,
@@ -21,7 +21,7 @@ from config_helpers import (
     optional_str,
     parse_enum,
 )
-from providers import EmbeddingProvider, LLMProvider
+from src.providers import EmbeddingProvider, LLMProvider
 
 log = logging.getLogger(__name__)
 

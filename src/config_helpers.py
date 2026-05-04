@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeVar
 
-from providers import EmbeddingProvider, LLMProvider
+from src.providers import EmbeddingProvider, LLMProvider
 
 
 # ---------------------------------------------------------------------------

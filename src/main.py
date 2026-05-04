@@ -12,7 +12,7 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
 
 from src.config import CONFIG as cfg
-from startup import bootstrap, ingest_only
+from src.startup import bootstrap, ingest_only
 
 
 
@@ -48,7 +48,7 @@ def main() -> None:
     Both entry points will process raw data as necessary.
 
     Command line arguments:
-    --server:   starts the FastAPI server. Note the 'reload' parameter, it will relaunch the server after any code changes if the 
+    --serve:   starts the FastAPI server. Note the 'reload' parameter, it will relaunch the server after any code changes if the 
                     environment mode is set to 'dev'.
     --chat:     allows the user to chat with the RAG agent directly without utilizing FastAPI endpoints.
     --ingest:   builds the vector database, which persists locally, and quits without launching the RAG agent.
