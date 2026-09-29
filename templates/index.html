@@ -271,7 +271,6 @@
     <h1>LLM Agent</h1>
     <nav id="nav">
         <button class="nav-btn active" onclick="showPanel('chat', this)">Chat</button>
-        <button class="nav-btn" onclick="showPanel('analyze', this)">Analyze URL</button>
         <button class="nav-btn" onclick="showPanel('evaluate', this)">Evaluate</button>
         <button class="nav-btn" onclick="showPanel('chat-eval', this)">Chat + Eval</button>
     </nav>
@@ -296,28 +295,6 @@
         <textarea id="chat-input" placeholder="Type a message..." rows="1"
             onkeydown="chatKey(event)" oninput="autoResize(this)"></textarea>
         <button class="send-btn" id="chat-send" onclick="sendChat()">Send</button>
-    </div>
-</div>
-
-<!-- ── Analyze URL panel ── -->
-<div id="panel-analyze" class="panel">
-    <div class="endpoint-panel">
-        <div class="field-group">
-            <label>URL</label>
-            <input type="url" id="analyze-url" placeholder="https://example.com">
-        </div>
-        <div class="field-group">
-            <label>Time limit (days, optional)</label>
-            <input type="number" id="analyze-days" placeholder="e.g. 30" min="1">
-        </div>
-        <div class="row">
-            <button class="ep-btn" id="analyze-btn" onclick="runAnalyze()">Analyze</button>
-            <div class="spinner" id="analyze-spin"></div>
-        </div>
-        <div>
-            <div class="result-label">Result</div>
-            <div class="result-box" id="analyze-result"></div>
-        </div>
     </div>
 </div>
 
@@ -387,8 +364,8 @@
         try {
             const res = await fetch("/health");
             const data = await res.json();
-            dot.className = data.agent_responsive ? "healthy" : "unhealthy";
-            text.textContent = data.agent_responsive ? "Online" : "Degraded";
+            dot.className = data.agent_ready ? "healthy" : "unhealthy";
+            text.textContent = data.agent_ready ? "Online" : "Starting";
         } catch {
             dot.className = "unhealthy";
             text.textContent = "Offline";
@@ -454,26 +431,49 @@
                 return;
             }
 
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
             const agentMsg = appendPartialMessage();
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                const chunk = decoder.decode(value);
-                for (const line of chunk.split("\n")) {
-                    if (line.startsWith("data: ")) {
-                        agentMsg.textContent += line.slice(6);
-                        chatMessages.scrollTop = chatMessages.scrollHeight;
-                    }
+            await readSSE(res, (event, data) => {
+                if (event === "error") {
+                    appendMessage("Error: " + data, "error");
+                } else if (event === "message") {
+                    agentMsg.textContent += data;
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
                 }
-            }
+            });
         } catch (e) {
             appendMessage("Network error: " + e.message, "error");
         } finally {
             setChatLoading(false);
             chatInput.focus();
+        }
+    }
+
+    // Minimal SSE reader for POST responses (EventSource only supports GET).
+    // Events are separated by a blank line; data is JSON-encoded by FastAPI.
+    async function readSSE(res, onEvent) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+            let sep;
+            while ((sep = buffer.indexOf("\n\n")) !== -1) {
+                const block = buffer.slice(0, sep);
+                buffer = buffer.slice(sep + 2);
+                let event = "message";
+                const dataLines = [];
+                for (const line of block.split("\n")) {
+                    if (line.startsWith("event:")) event = line.slice(6).trim();
+                    else if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+                }
+                if (!dataLines.length) continue;
+                const raw = dataLines.join("\n");
+                let data;
+                try { data = JSON.parse(raw); } catch { data = raw; }
+                onEvent(event, data);
+            }
         }
     }
 
@@ -487,34 +487,6 @@
 
     function chatKey(e) {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
-    }
-
-    // ---------------------------------------------------------------------------
-    // Analyze URL
-    // ---------------------------------------------------------------------------
-
-    async function runAnalyze() {
-        const url = document.getElementById("analyze-url").value.trim();
-        const days = document.getElementById("analyze-days").value.trim();
-        if (!url) return;
-        setLoading("analyze", true);
-        showResult("analyze-result", "", false, false);
-        try {
-            const body = { url };
-            if (days) body.time_limit_days = parseInt(days);
-            const res = await fetch("/analyze", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(body),
-            });
-            const data = await res.json();
-            if (!res.ok) showResult("analyze-result", "Error: " + (data.detail ?? res.statusText), false, true);
-            else showResult("analyze-result", data.analysis, true, false);
-        } catch (e) {
-            showResult("analyze-result", "Network error: " + e.message, false, true);
-        } finally {
-            setLoading("analyze", false);
-        }
     }
 
     // ---------------------------------------------------------------------------

@@ -136,9 +136,30 @@ def build_evaluator(
 async def evaluate_response(
     bundle: EvaluatorBundle,
     query: str,
-    response: Any,  # llama_index Response object from query_engine.query()
+    response: Any,  # llama_index Response object from query_engine.aquery()
 ) -> AggregatedEvaluationResult:
-    """Run all evaluators in the bundle against a query/response pair.
+    """Run all evaluators in the bundle against a query/Response pair.
+
+    Args:
+        bundle:   EvaluatorBundle from build_evaluator().
+        query:    The original user query string.
+        response: The Response object returned by query_engine.aquery().
+                  Its source_nodes are used as the retrieved contexts.
+
+    Returns:
+        AggregatedEvaluationResult with all available scores and feedback.
+    """
+    contexts = [node.get_content() for node in getattr(response, "source_nodes", None) or []]
+    return await evaluate_answer(bundle, query=query, answer=str(response), contexts=contexts)
+
+
+async def evaluate_answer(
+    bundle: EvaluatorBundle,
+    query: str,
+    answer: str,
+    contexts: list[str],
+) -> AggregatedEvaluationResult:
+    """Run all evaluators in the bundle against an answer and the contexts it should be grounded in.
 
     Individual evaluator failures are caught and logged rather than
     propagating — a single evaluator error should not discard all results.
@@ -146,34 +167,25 @@ async def evaluate_response(
     Args:
         bundle:   EvaluatorBundle from build_evaluator().
         query:    The original user query string.
-        response: The Response object returned by query_engine.query() or
-                  agent.run(). Must carry source_nodes for faithfulness
-                  and relevancy to work correctly.
+        answer:   The answer to evaluate (from any source, not necessarily this app's agent).
+        contexts: Retrieved text chunks the answer is judged against for faithfulness and relevancy.
 
     Returns:
         AggregatedEvaluationResult with all available scores and feedback.
     """
-    result = AggregatedEvaluationResult(
-        query=query,
-        response=str(response),
-    )
+    result = AggregatedEvaluationResult(query=query, response=answer)
+    eval_kwargs = {"query": query, "response": answer, "contexts": contexts}
 
     # Faithfulness
     try:
-        result.faithfulness = await bundle.faithfulness.aevaluate_response(
-            query=query,
-            response=response,
-        )
+        result.faithfulness = await bundle.faithfulness.aevaluate(**eval_kwargs)
         log.debug("Faithfulness: passing=%s score=%s", result.faithfulness.passing, result.faithfulness.score)
     except Exception as e:
         log.warning("Faithfulness evaluator failed: %s", e)
 
     # Relevancy
     try:
-        result.relevancy = await bundle.relevancy.aevaluate_response(
-            query=query,
-            response=response,
-        )
+        result.relevancy = await bundle.relevancy.aevaluate(**eval_kwargs)
         log.debug("Relevancy: passing=%s score=%s", result.relevancy.passing, result.relevancy.score)
     except Exception as e:
         log.warning("Relevancy evaluator failed: %s", e)
@@ -181,10 +193,7 @@ async def evaluate_response(
     # Guidelines
     for i, evaluator in enumerate(bundle.guidelines):
         try:
-            g_result = await evaluator.aevaluate_response(
-                query=query,
-                response=response,
-            )
+            g_result = await evaluator.aevaluate(**eval_kwargs)
             result.guidelines.append(g_result)
             log.debug("Guideline %d: passing=%s", i, g_result.passing)
         except Exception as e:

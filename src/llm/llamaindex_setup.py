@@ -9,7 +9,7 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.embeddings.ollama import OllamaEmbedding
 
 from src.config import LlmSettings, EmbedderSettings
-from src.llm.llm_factory import build_llm
+from src.llm.llm_factory import build_llm_from_settings
 from src.providers import EmbeddingProvider
 
 log = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ def configure_llamaindex(llm_settings: LlmSettings, embedder_settings: EmbedderS
     try:
         Settings.llm = _build_llm(llm_settings)
         Settings.embed_model = _build_embedding_model(embedder_settings)
-        Settings.text_splitter = SentenceSplitter(chunk_size=2048)
+        Settings.text_splitter = SentenceSplitter(chunk_size=embedder_settings.chunk_size)
 
         log.info("LLM configured: provider=%s model=%s", llm_settings.provider, llm_settings.model)
         log.info("Embeddings configured: provider=%s model=%s", embedder_settings.provider, embedder_settings.model)
@@ -53,17 +53,7 @@ def configure_llamaindex(llm_settings: LlmSettings, embedder_settings: EmbedderS
 def _build_llm(settings: LlmSettings):
     """Delegate to llm_factory — single source of truth for provider wiring."""
     try:
-        return build_llm(
-            provider=settings.provider,
-            model=settings.model,
-            # API key falls back to env var inside build_llm if not set on cfg.
-            api_key=settings.api_key,
-            # Ollama-specific kwargs — ignored by other providers via **kwargs.
-            base_url=settings.base_url,
-            request_timeout=settings.request_timeout,
-            context_window=settings.context_window,
-            temperature=settings.temperature,
-        )
+        return build_llm_from_settings(settings)
     except ValueError as e:
         raise LLMConfigurationError(str(e)) from e
 

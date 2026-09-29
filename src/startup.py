@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import uuid
 
 from src.agent_setup import build_rag_agent, build_generic_tools
-from src.llm import configure_llamaindex, build_llm
+from src.llm import configure_llamaindex, build_llm_from_settings
 from src.config import CONFIG as cfg
 from src.indexing import IndexManager, ChromaIndexManager
 from src.logging_setup import setup_logging
@@ -53,7 +53,12 @@ def _run_ingest(manager: IndexManager, chroma: ChromaIndexManager) -> None:
 def _build_managers() -> tuple[IndexManager, ChromaIndexManager]:
     return (
         IndexManager(raw_dir=cfg.raw_dir, env_dir=cfg.env_dir),
-        ChromaIndexManager(chroma_dir=cfg.chroma_dir, text_column="text", collection_name=cfg.collection_name),
+        ChromaIndexManager(
+            chroma_dir=cfg.chroma_dir,
+            text_column="text",
+            collection_name=cfg.collection_name,
+            distance_metric=cfg.distance_metric,
+        ),
     )
 
 
@@ -116,7 +121,7 @@ def bootstrap() -> BootstrapResult:
 
     evaluator_bundle = None
     if cfg.judge_llm_settings:
-        judge_llm = build_llm(cfg.judge_llm_settings)
+        judge_llm = build_llm_from_settings(cfg.judge_llm_settings)
         evaluator_bundle = build_evaluator(judge_llm)
         log.info("Evaluator ready.")
 

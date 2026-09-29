@@ -39,6 +39,7 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 
 # 3. Install dependencies
 pip install -r requirements.txt
+# for tests: pip install -r requirements-dev.txt
 
 # 4. Create your .env file
 cp .env.example .env
@@ -82,7 +83,7 @@ EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 | `AUTO_INGEST` | `true` | Ingest raw documents on startup if index is empty |
 | `RETRIEVAL_TOP_K` | `5` | Number of documents retrieved per query |
 | `MAX_ITERATIONS` | `5` | Agent reasoning loop cap |
-| `MEMORY_TOKEN_LIMIT` | `40000` | Total token budget for short + long term memory |
+| `MEMORY_TOKEN_LIMIT` | `4096` | Total token budget for short + long term memory |
 | `ENABLE_FACT_EXTRACTION` | `true` | Extract facts from conversation into long-term memory |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `JUDGE_PROVIDER` | _(unset)_ | Provider for the evaluator LLM |
@@ -149,7 +150,7 @@ data/
   prod/
 
 templates/
-  index.html                # Web UI (chat, analyze, evaluate, chat+eval tabs)
+  index.html                # Web UI (chat, evaluate, chat+eval tabs)
 ```
 
 ---
@@ -159,10 +160,9 @@ templates/
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/` | Web UI |
-| `GET` | `/health` | Agent health check |
+| `GET` | `/health` | Liveness check (does not call the LLM) |
 | `POST` | `/chat` | Non-streaming chat (JSON response) |
 | `POST` | `/chat/stream` | Streaming chat via SSE |
-| `POST` | `/analyze` | Analyze a URL |
 | `POST` | `/evaluate` | Evaluate a question/answer pair |
 | `POST` | `/chat_and_evaluate` | Chat then evaluate the response |
 | `POST` | `/clear` | Reset conversation memory |
@@ -237,6 +237,5 @@ Core dependencies. See `requirements.txt` for pinned versions.
 - `llama-index-embeddings-huggingface / ollama` — embedding models
 - `chromadb` — vector database
 - `fastapi` + `uvicorn` — web server
-- `sse-starlette` — server-sent events for streaming
 - `sentence-transformers` — HuggingFace embedding backend
 - `python-dotenv` — environment variable loading

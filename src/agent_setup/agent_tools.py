@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import logging
+import operator
 from datetime import datetime
 
 import chromadb
@@ -19,11 +21,37 @@ def get_current_datetime() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+_BIN_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+}
+_UNARY_OPS = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+_MAX_EXPONENT = 1000
+
+
+def _eval_node(node: ast.AST) -> int | float:
+    """Evaluate an arithmetic AST node. Anything other than numbers and basic operators is rejected."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.BinOp) and type(node.op) in _BIN_OPS:
+        left, right = _eval_node(node.left), _eval_node(node.right)
+        if isinstance(node.op, ast.Pow) and abs(right) > _MAX_EXPONENT:
+            raise ValueError(f"exponent larger than {_MAX_EXPONENT}")
+        return _BIN_OPS[type(node.op)](left, right)
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
+        return _UNARY_OPS[type(node.op)](_eval_node(node.operand))
+    raise ValueError(f"unsupported expression element: {type(node).__name__}")
+
+
 def calculate(expression: str) -> str:
-    """Evaluates a mathematical expression. Example: '2 + 2 * 10'"""
+    """Evaluates an arithmetic expression using + - * / // % ** and parentheses. Example: '2 + 2 * 10'"""
     try:
-        result = eval(expression, {"__builtins__": {}})
-        return str(result)
+        return str(_eval_node(ast.parse(expression, mode="eval").body))
     except Exception as e:
         return f"Calculation error: {e}"
 

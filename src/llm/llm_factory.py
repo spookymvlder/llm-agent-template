@@ -10,6 +10,7 @@ from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.llms.anthropic import Anthropic
 from llama_index.llms.ollama import Ollama
 
+from src.config_helpers import LlmSettings
 from src.providers import LLMProvider
 
 log = logging.getLogger(__name__)
@@ -78,3 +79,31 @@ def build_llm(
         return spec.cls(model=model, **{spec.api_key_param: resolved_key}, **kwargs)
     except Exception as e:
         raise ValueError(f"Failed to initialize {provider} LLM: {e}") from e
+
+
+def build_llm_from_settings(settings: LlmSettings) -> Any:
+    """Build an LLM from an LlmSettings slice of AppConfig.
+
+    Ollama-only settings (base_url, request_timeout, context_window) are only
+    forwarded to Ollama; hosted providers use their own defaults.
+
+    Raises:
+        ValueError: Unknown provider, missing API key, or failed initialization.
+    """
+    kwargs: dict[str, Any] = {}
+    if settings.temperature is not None:
+        kwargs["temperature"] = settings.temperature
+    if settings.provider == LLMProvider.OLLAMA:
+        ollama_kwargs = {
+            "base_url": settings.base_url,
+            "request_timeout": settings.request_timeout,
+            "context_window": settings.context_window,
+        }
+        kwargs.update({k: v for k, v in ollama_kwargs.items() if v is not None})
+
+    return build_llm(
+        provider=settings.provider,
+        model=settings.model,
+        api_key=settings.api_key,
+        **kwargs,
+    )

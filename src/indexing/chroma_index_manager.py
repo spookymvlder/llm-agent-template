@@ -36,6 +36,8 @@ class ChromaIndexManager:
                         Must be unique per row. If None, row index is used.
         metadata_columns: Columns to store as document metadata.
                         If None, all columns except text_column are used.
+        distance_metric: HNSW space for new collections: 'cosine', 'l2' or 'ip'.
+                        Ignored for collections that already exist.
     """
 
     def __init__(
@@ -46,12 +48,14 @@ class ChromaIndexManager:
         text_column: str = "text",
         id_column: str | None = None,
         metadata_columns: list[str] | None = None,
+        distance_metric: str = "cosine",
     ) -> None:
         self.chroma_dir = chroma_dir
         self.collection_name = collection_name
         self.text_column = text_column
         self.id_column = id_column
         self.metadata_columns = metadata_columns
+        self.distance_metric = distance_metric
 
         self.chroma_dir.mkdir(parents=True, exist_ok=True)
         self._client = chromadb.PersistentClient(path=str(self.chroma_dir))
@@ -74,7 +78,10 @@ class ChromaIndexManager:
         - If df is None and the collection already exists, the index is loaded
           as-is (useful when re-attaching to a fully-built index at startup).
         """
-        collection = self._client.get_or_create_collection(self.collection_name)
+        collection = self._client.get_or_create_collection(
+            self.collection_name,
+            metadata={"hnsw:space": self.distance_metric},
+        )
         vector_store = ChromaVectorStore(chroma_collection=collection)
         storage_context = StorageContext.from_defaults(vector_store=vector_store)
 

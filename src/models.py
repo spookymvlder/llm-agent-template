@@ -1,31 +1,20 @@
-from pydantic import BaseModel
+from typing import Annotated, Any
 
-class EvaluationResult(BaseModel):
-    faithfulness: int
-    relevance: int
-    completeness: int
-    fairness: int
-    justification: str
+from pydantic import BaseModel, StringConstraints
+
+NonEmptyStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
 
 class ChatRequest(BaseModel):
-    message: str
+    message: NonEmptyStr
 
 class ChatResponse(BaseModel):
     response: str
 
-class AnalyzeRequest(BaseModel):
-    url: str
-    time_limit_days: int | None = None
-
-class AnalyzeResponse(BaseModel):
-    url: str
-    analysis: str
-
 class HealthResponse(BaseModel):
     status: str
-    agent_responsive: bool
-    message: str = ""
-    error: str = ""
+    agent_ready: bool
+    evaluator_ready: bool
 
 class EvaluateRequest(BaseModel):
     question: str
@@ -34,9 +23,9 @@ class EvaluateRequest(BaseModel):
 class EvaluateResponse(BaseModel):
     question: str
     answer: str
-    evaluation: str
+    evaluation: dict[str, Any]
 
 class ChatEvalResponse(BaseModel):
     question: str
     answer: str
-    evaluation: str
+    evaluation: dict[str, Any]

@@ -83,7 +83,7 @@ class AppConfig:
     embedding_model: str
     chunk_size: int
 
-    hf_token: str
+    hf_token: str | None
 
     # Retrieval
     top_k: int
@@ -257,10 +257,10 @@ class AppConfig:
             google_api_key=os.getenv("GOOGLE_API_KEY"),
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
             ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-            request_timeout=as_float(os.getenv("REQUEST_TIMEOUT"), default=300.0),
+            request_timeout=as_float(os.getenv("REQUEST_TIMEOUT_S"), default=300.0),
             context_window=as_int(os.getenv("CONTEXT_WINDOW"), default=32768),
             temperature=as_float(os.getenv("TEMPERATURE"), default=0.2),
-            memory_token_limit=as_int(os.getenv("MEMORY_TOKEN_LIMI"), default=4096),
+            memory_token_limit=as_int(os.getenv("MEMORY_TOKEN_LIMIT"), default=4096),
 
             # Judge LLM
             judge_provider=optional_provider(os.getenv("JUDGE_PROVIDER")),
