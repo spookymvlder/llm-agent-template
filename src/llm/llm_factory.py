@@ -11,7 +11,7 @@ from llama_index.llms.anthropic import Anthropic
 from llama_index.llms.ollama import Ollama
 
 from src.config_helpers import LlmSettings
-from src.providers import LLMProvider
+from src.providers import API_KEY_ENV_VARS, LLMProvider
 
 log = logging.getLogger(__name__)
 
@@ -25,9 +25,9 @@ class _ProviderSpec:
 
 # Registry — add new providers here, nothing else needs to change.
 _REGISTRY: dict[str, _ProviderSpec] = {
-    LLMProvider.OPENAI:  _ProviderSpec(cls=OpenAI,     env_var="OPENAI_API_KEY",     api_key_param="api_key"),
-    LLMProvider.GEMINI:  _ProviderSpec(cls=GoogleGenAI,     env_var="GOOGLE_API_KEY",     api_key_param="api_key"),
-    LLMProvider.ANTHROPIC: _ProviderSpec(cls=Anthropic, env_var="ANTHROPIC_API_KEY", api_key_param="api_key"),
+    LLMProvider.OPENAI:    _ProviderSpec(cls=OpenAI,      env_var=API_KEY_ENV_VARS[LLMProvider.OPENAI],    api_key_param="api_key"),
+    LLMProvider.GEMINI:    _ProviderSpec(cls=GoogleGenAI, env_var=API_KEY_ENV_VARS[LLMProvider.GEMINI],    api_key_param="api_key"),
+    LLMProvider.ANTHROPIC: _ProviderSpec(cls=Anthropic,   env_var=API_KEY_ENV_VARS[LLMProvider.ANTHROPIC], api_key_param="api_key"),
 }
 
 
@@ -85,7 +85,8 @@ def build_llm_from_settings(settings: LlmSettings) -> Any:
     """Build an LLM from an LlmSettings slice of AppConfig.
 
     Ollama-only settings (base_url, request_timeout, context_window) are only
-    forwarded to Ollama; hosted providers use their own defaults.
+    forwarded to Ollama; hosted providers use their own defaults. max_tokens is
+    passed as num_predict for Ollama and as max_tokens for hosted providers.
 
     Raises:
         ValueError: Unknown provider, missing API key, or failed initialization.
@@ -100,6 +101,10 @@ def build_llm_from_settings(settings: LlmSettings) -> Any:
             "context_window": settings.context_window,
         }
         kwargs.update({k: v for k, v in ollama_kwargs.items() if v is not None})
+        if settings.max_tokens is not None:
+            kwargs["additional_kwargs"] = {"num_predict": settings.max_tokens}
+    elif settings.max_tokens is not None:
+        kwargs["max_tokens"] = settings.max_tokens
 
     return build_llm(
         provider=settings.provider,

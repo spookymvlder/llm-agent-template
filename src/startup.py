@@ -51,12 +51,14 @@ def _run_ingest(manager: IndexManager, chroma: ChromaIndexManager) -> None:
 
 
 def _build_managers() -> tuple[IndexManager, ChromaIndexManager]:
+    # TODO Phase 2: build one handle per configured collection.
+    collection = cfg.default_collection
     return (
-        IndexManager(raw_dir=cfg.raw_dir, env_dir=cfg.env_dir),
+        IndexManager(raw_dir=collection.raw_dir, env_dir=cfg.env_dir),
         ChromaIndexManager(
             chroma_dir=cfg.chroma_dir,
             text_column="text",
-            collection_name=cfg.collection_name,
+            collection_name=collection.name,
             distance_metric=cfg.distance_metric,
         ),
     )
@@ -64,7 +66,7 @@ def _build_managers() -> tuple[IndexManager, ChromaIndexManager]:
 
 def _build_query_engine(chroma: ChromaIndexManager):
     result = chroma.load_or_build()
-    return result.index.as_query_engine(similarity_top_k=cfg.top_k)
+    return result.index.as_query_engine(similarity_top_k=cfg.default_collection.top_k)
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +79,7 @@ def ingest_only() -> None:
     Used by: main.py `ingest` subcommand.
     """
     _setup_logging()
+    cfg.validate()
     configure_llamaindex(cfg.llm_settings, cfg.embedder_settings)
     manager, chroma = _build_managers()
     _run_ingest(manager, chroma)
@@ -92,6 +95,7 @@ def bootstrap() -> BootstrapResult:
     Used by: FastAPI lifespan, main.py `serve` and `chat` subcommands.
     """
     _setup_logging()
+    cfg.validate()
     configure_llamaindex(cfg.llm_settings, cfg.embedder_settings)
 
     manager, chroma = _build_managers()
@@ -103,14 +107,14 @@ def bootstrap() -> BootstrapResult:
     if manager.ingested_count() == 0:
         log.warning(
             "ChromaDB collection is empty. The agent will have no documents to search. "
-            "Add documents to %s and run ingest.", cfg.raw_dir
+            "Add documents to %s and run ingest.", cfg.default_collection.raw_dir
         )
 
     query_engine = _build_query_engine(chroma)
     tools = build_generic_tools(
         query_engine=query_engine,
         chroma_client=chroma.client,      # expose _client as a property on ChromaIndexManager
-        collection_name=cfg.collection_name,
+        collection_name=cfg.default_collection.name,
     )
     
     agent = build_rag_agent(query_engine=query_engine, extra_tools=tools)

@@ -77,20 +77,26 @@ EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 |---|---|---|
 | `LLM_PROVIDER` | `ollama` | `ollama`, `openai`, `anthropic`, `gemini` |
 | `LLM_MODEL` | `qwen3` | Model name for the selected provider |
+| `LLM_TEMPERATURE` / `LLM_CONTEXT_WINDOW` / `LLM_MAX_TOKENS` / `LLM_RATE_LIMIT_RPM` | `0.2` / `8192` / provider default / unlimited | Primary LLM tuning. Context window applies to Ollama only |
+| `ROUTER_*`, `JUDGE_*` | fall back to `LLM_*` | Same suffixes as `LLM_*` (`_PROVIDER`, `_MODEL`, `_TEMPERATURE`, ...). The judge (evaluation) is disabled unless `JUDGE_MODEL` is set |
+| `ENABLE_ROUTER` | `false` | Classify queries with the router LLM before running an agent |
 | `EMBEDDING_PROVIDER` | `huggingface` | `huggingface` or `ollama` |
 | `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model name |
-| `ENVIRONMENT` | `dev` | `dev`, `test`, or `prod` |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `512` / `50` | Splitter settings, in tokens |
+| `USE_CUDA` | `false` | Run HuggingFace embeddings on GPU if available |
+| `COLLECTIONS` | `documents` | Comma-separated collection names; the first is the default |
+| `COLLECTION_<NAME>_RAW_DIR` / `_TOP_K` | `data/raw/<name>` / `RETRIEVAL_TOP_K` | Per-collection overrides |
+| `ENVIRONMENT` | `dev` | `dev`, `test`, or `prod` (dev enables hot reload) |
 | `AUTO_INGEST` | `true` | Ingest raw documents on startup if index is empty |
-| `RETRIEVAL_TOP_K` | `5` | Number of documents retrieved per query |
-| `MAX_ITERATIONS` | `5` | Agent reasoning loop cap |
+| `RETRIEVAL_TOP_K` | `5` | Number of chunks retrieved per query |
+| `MAX_ITERATIONS` | `3` | Agent reasoning loop cap |
 | `MEMORY_TOKEN_LIMIT` | `4096` | Total token budget for short + long term memory |
 | `ENABLE_FACT_EXTRACTION` | `true` | Extract facts from conversation into long-term memory |
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `JUDGE_PROVIDER` | _(unset)_ | Provider for the evaluator LLM |
-| `JUDGE_MODEL` | _(unset)_ | Model for the evaluator LLM |
 | `HF_TOKEN` | _(unset)_ | HuggingFace token (suppresses rate limit warnings) |
-| `DEBUG` | `false` | Enables uvicorn hot reload |
 | `LOG_LEVEL` | `INFO` | Python logging level |
+
+Configuration is parsed when `src.config` is imported and validated at startup; missing API keys and invalid values are all reported together.
 
 ---
 
@@ -115,7 +121,7 @@ python -m src.main chat
 python -m src.main ingest
 ```
 
-Place documents in `data/raw/` before ingesting. Supported formats: `.txt`, `.md`, `.pdf`, `.html`, `.htm`, `.json`, `.csv`.
+Place documents in `data/raw/<collection>/` (by default `data/raw/documents/`) before ingesting. Supported formats: `.txt`, `.md`, `.pdf`, `.html`, `.htm`, `.json`, `.csv`.
 
 ---
 
@@ -144,7 +150,7 @@ src/
   startup.py                # bootstrap() — full application startup sequence
 
 data/
-  raw/                      # Drop documents here for ingestion
+  raw/<collection>/         # Drop documents here for ingestion
   dev/                      # Dev environment data (chroma/, manifest.json)
   test/
   prod/
@@ -172,7 +178,7 @@ templates/
 
 ## Adding Documents
 
-Place any supported file in `data/raw/`. On next startup (or by running `ingest`), the file will be chunked, embedded, and stored in ChromaDB. Files are never moved or deleted — the manifest tracks what each environment has processed.
+Place any supported file in `data/raw/<collection>/`. On next startup (or by running `ingest`), the file will be chunked, embedded, and stored in ChromaDB. Files are never moved or deleted — the manifest tracks what each environment has processed.
 
 To force a full re-ingest, delete the environment's `manifest.json`:
 

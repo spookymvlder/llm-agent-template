@@ -37,7 +37,10 @@ def configure_llamaindex(llm_settings: LlmSettings, embedder_settings: EmbedderS
     try:
         Settings.llm = _build_llm(llm_settings)
         Settings.embed_model = _build_embedding_model(embedder_settings)
-        Settings.text_splitter = SentenceSplitter(chunk_size=embedder_settings.chunk_size)
+        Settings.text_splitter = SentenceSplitter(
+            chunk_size=embedder_settings.chunk_size,
+            chunk_overlap=embedder_settings.chunk_overlap,
+        )
 
         log.info("LLM configured: provider=%s model=%s", llm_settings.provider, llm_settings.model)
         log.info("Embeddings configured: provider=%s model=%s", embedder_settings.provider, embedder_settings.model)
@@ -63,10 +66,18 @@ def _build_embedding_model(embedder_settings: EmbedderSettings):
     try:
         if embedder_settings.provider == EmbeddingProvider.OLLAMA:
             log.info("Building Ollama embeddings at %s...", embedder_settings.base_url)
-            return OllamaEmbedding(model=embedder_settings.model, base_url=embedder_settings.base_url)
+            return OllamaEmbedding(
+                model_name=embedder_settings.model,
+                base_url=embedder_settings.base_url,
+                embed_batch_size=embedder_settings.embed_batch_size,
+            )
         elif embedder_settings.provider == EmbeddingProvider.HUGGINGFACE:
-            log.info("Building HuggingFace embeddings: %s...", embedder_settings.model)
-            return HuggingFaceEmbedding(model_name=embedder_settings.model)
+            log.info("Building HuggingFace embeddings: %s on %s...", embedder_settings.model, embedder_settings.device)
+            return HuggingFaceEmbedding(
+                model_name=embedder_settings.model,
+                device=embedder_settings.device,
+                embed_batch_size=embedder_settings.embed_batch_size,
+            )
         else:
             raise EmbeddingConfigurationError(
                 f"Unknown EMBEDDING_PROVIDER '{embedder_settings.provider}'. "
