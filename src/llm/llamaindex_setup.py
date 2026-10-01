@@ -27,22 +27,26 @@ class EmbeddingConfigurationError(Exception):
 # LlamaIndex global configuration
 # ---------------------------------------------------------------------------
 
-def configure_llamaindex(llm_settings: LlmSettings, embedder_settings: EmbedderSettings) -> None:
+def configure_llamaindex(llm_settings: LlmSettings | None, embedder_settings: EmbedderSettings) -> None:
     """Configure LlamaIndex Settings with LLM and embedding models from AppConfig.
+
+    Args:
+        llm_settings:      Primary LLM. None skips the LLM (ingest-only runs), leaving Settings.llm unset.
+        embedder_settings: Embedding model and text splitter.
 
     Raises:
         LLMConfigurationError: Invalid provider, missing API key, or connection error.
         EmbeddingConfigurationError: Embedding model setup failed.
     """
     try:
-        Settings.llm = _build_llm(llm_settings)
+        if llm_settings is not None:
+            Settings.llm = _build_llm(llm_settings)
+            log.info("LLM configured: provider=%s model=%s", llm_settings.provider, llm_settings.model)
         Settings.embed_model = _build_embedding_model(embedder_settings)
         Settings.text_splitter = SentenceSplitter(
             chunk_size=embedder_settings.chunk_size,
             chunk_overlap=embedder_settings.chunk_overlap,
         )
-
-        log.info("LLM configured: provider=%s model=%s", llm_settings.provider, llm_settings.model)
         log.info("Embeddings configured: provider=%s model=%s", embedder_settings.provider, embedder_settings.model)
 
     except (LLMConfigurationError, EmbeddingConfigurationError):

@@ -62,6 +62,7 @@ class AppConfig:
     seed: int
     environment: AppConfig.Environment
     auto_ingest: bool
+    reindex_changed_files: bool   # re-embed files whose content hash changed since they were ingested
 
     # Paths. Directories are created by the components that use them, not at import.
     project_root: Path
@@ -188,6 +189,7 @@ class AppConfig:
             seed=as_int(os.getenv("SEED"), default=42),
             environment=env_mode,
             auto_ingest=as_bool(os.getenv("AUTO_INGEST"), default=True),
+            reindex_changed_files=as_bool(os.getenv("REINDEX_CHANGED_FILES"), default=True),
 
             # Paths
             project_root=project_root,
@@ -245,16 +247,19 @@ class AppConfig:
     # Validation
     # ---------------------------------------------------------------------------
 
-    def validate(self) -> None:
+    def validate(self, check_llm_keys: bool = True) -> None:
         """Check that the configuration is usable. Called by bootstrap before anything is built.
+
+        Args:
+            check_llm_keys: Require API keys for the LLM roles in use. Ingest-only runs don't need an LLM.
 
         Raises:
             ConfigError: Listing every problem found, not just the first.
         """
         problems: list[str] = []
 
-        roles = {"LLM": self.llm_settings, "JUDGE": self.judge_llm_settings}
-        if self.enable_router:
+        roles = {"LLM": self.llm_settings, "JUDGE": self.judge_llm_settings} if check_llm_keys else {}
+        if self.enable_router and check_llm_keys:
             roles["ROUTER"] = self.router_llm_settings
         for prefix, settings in roles.items():
             if settings and settings.provider in API_KEY_ENV_VARS and not settings.api_key:
@@ -373,7 +378,8 @@ def _llm_role(prefix: str, fallback: LlmSettings, optional: bool = False) -> Llm
 
 def _collections(project_root: Path, raw_dir: Path, default_top_k: int) -> tuple[CollectionSettings, ...]:
     """Parse COLLECTIONS (comma list, first is the default) plus optional per-collection overrides:
-    COLLECTION_<NAME>_RAW_DIR (relative to the project root, default data/raw/<name>) and COLLECTION_<NAME>_TOP_K.
+    COLLECTION_<NAME>_RAW_DIR (relative to the project root, default data/raw/<name>), COLLECTION_<NAME>_TOP_K and
+    COLLECTION_<NAME>_DESCRIPTION.
     <NAME> is the collection name upper-cased with non-alphanumerics replaced by '_'.
     """
     names = as_list(os.getenv("COLLECTIONS"), default=["documents"])
@@ -385,6 +391,8 @@ def _collections(project_root: Path, raw_dir: Path, default_top_k: int) -> tuple
             name=name,
             raw_dir=(project_root / raw_override).resolve() if raw_override else raw_dir / name,
             top_k=as_int(os.getenv(f"COLLECTION_{key}_TOP_K"), default=default_top_k, min=1),
+            description=optional_str(os.getenv(f"COLLECTION_{key}_DESCRIPTION"))
+                        or f"Documents in the '{name}' collection.",
         ))
     return tuple(result)
 

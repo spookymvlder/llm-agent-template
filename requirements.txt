@@ -7,6 +7,7 @@ llama-index-llms-google-genai
 llama-index-llms-ollama
 llama-index-embeddings-huggingface
 llama-index-embeddings-ollama
+llama-index-readers-file
 llama-index-vector-stores-chroma
 numpy==2.4.3
 pandas==3.0.1

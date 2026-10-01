@@ -85,9 +85,10 @@ EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `512` / `50` | Splitter settings, in tokens |
 | `USE_CUDA` | `false` | Run HuggingFace embeddings on GPU if available |
 | `COLLECTIONS` | `documents` | Comma-separated collection names; the first is the default |
-| `COLLECTION_<NAME>_RAW_DIR` / `_TOP_K` | `data/raw/<name>` / `RETRIEVAL_TOP_K` | Per-collection overrides |
+| `COLLECTION_<NAME>_RAW_DIR` / `_TOP_K` / `_DESCRIPTION` | `data/raw/<name>` / `RETRIEVAL_TOP_K` / generic | Per-collection overrides. The description tells the agent what the collection contains |
 | `ENVIRONMENT` | `dev` | `dev`, `test`, or `prod` (dev enables hot reload) |
-| `AUTO_INGEST` | `true` | Ingest raw documents on startup if index is empty |
+| `AUTO_INGEST` | `true` | Ingest new (and, if enabled, changed) files on startup |
+| `REINDEX_CHANGED_FILES` | `true` | Re-embed files whose content hash changed since ingestion; `false` only logs them |
 | `RETRIEVAL_TOP_K` | `5` | Number of chunks retrieved per query |
 | `MAX_ITERATIONS` | `3` | Agent reasoning loop cap |
 | `MEMORY_TOKEN_LIMIT` | `4096` | Total token budget for short + long term memory |
@@ -118,7 +119,9 @@ python -m src.main chat
 ### Ingest documents without starting the server
 
 ```bash
-python -m src.main ingest
+python -m src.main ingest                      # all collections
+python -m src.main ingest -c rules             # one collection
+python -m src.main ingest -c rules --reindex   # delete and re-embed (after changing embedding/chunk settings)
 ```
 
 Place documents in `data/raw/<collection>/` (by default `data/raw/documents/`) before ingesting. Supported formats: `.txt`, `.md`, `.pdf`, `.html`, `.htm`, `.json`, `.csv`.
@@ -130,15 +133,17 @@ Place documents in `data/raw/<collection>/` (by default `data/raw/documents/`) b
 ```
 src/
   agent_setup/
-    agent_factory.py        # build_rag_agent(), build_evaluator_agent()
-    agent_tools.py          # Generic tools (datetime, calculator, etc.)
+    agent_factory.py        # build_rag_agent(): one search tool per collection
+    agent_tools.py          # Generic tools (datetime, calculator, list documents)
     memory_factory.py         # Build Memory with optional memory blocks
   indexing/
-    chroma_index_manager.py # ChromaDB-backed VectorStoreIndex
+    chroma_index_manager.py # ChromaDB-backed VectorStoreIndex for one collection
+    collections.py          # CollectionHandle: store + files + index + postprocessors
     index_manager.py        # File discovery, manifest tracking
   llm/
     llamaindex_setup.py     # Configures LlamaIndex Settings globals
     llm_factory.py          # Builds LLM instances from LlmSettings
+  app_context.py            # AppContext (what bootstrap builds) and Profile
   config.py                 # AppConfig dataclass, loaded from .env
   config_helpers.py         # Coercion helpers, settings dataclasses
   evaluation.py             # EvaluatorBundle, evaluate_response()
@@ -147,11 +152,11 @@ src/
   main.py                   # CLI entry point (serve / chat / ingest)
   models.py                 # Pydantic models for API schemas
   providers.py              # LLMProvider and EmbeddingProvider enums
-  startup.py                # bootstrap() — full application startup sequence
+  startup.py                # bootstrap(profile) — builds an AppContext
 
 data/
   raw/<collection>/         # Drop documents here for ingestion
-  dev/                      # Dev environment data (chroma/, manifest.json)
+  dev/                      # Dev environment data (chroma/, manifests/<collection>.json)
   test/
   prod/
 
@@ -178,26 +183,39 @@ templates/
 
 ## Adding Documents
 
-Place any supported file in `data/raw/<collection>/`. On next startup (or by running `ingest`), the file will be chunked, embedded, and stored in ChromaDB. Files are never moved or deleted — the manifest tracks what each environment has processed.
+Place any supported file in `data/raw/<collection>/`. On next startup (when `AUTO_INGEST=true`) or by running `ingest`, new files are chunked, embedded, and stored in ChromaDB. Files are never moved or deleted — a manifest per collection records each file's SHA-256 (plus size and modification time, so unchanged files aren't re-hashed).
 
-To force a full re-ingest, delete the environment's `manifest.json`:
+When a file's content changes, its old chunks are replaced on the next ingest (set `REINDEX_CHANGED_FILES=false` to only log changed files). Files removed from disk are reported but their chunks are kept; reindex the collection to drop them:
 
 ```bash
-# Dev environment
-rm data/dev/manifest.json
+python -m src.main ingest -c documents --reindex
+```
+
+Each document gets a stable id (`<path relative to the collection folder>#<position in file>`), so re-ingesting never duplicates it.
+
+### Collections
+
+`COLLECTIONS=rules,transcripts` creates two collections, each with its own folder, search tool and optional `COLLECTION_<NAME>_DESCRIPTION` (which tells the agent when to search it). Use separate collections for different kinds of content; use metadata for variations within one kind (e.g. rulebook edition).
+
+### Retrieval postprocessors
+
+Per-collection LlamaIndex node postprocessors run after retrieval and before the LLM sees the chunks — the place for deterministic handling based on metadata:
+
+```python
+ctx = bootstrap(Profile.SERVE, postprocessors={"rules": [MyEditionPostprocessor()]})
 ```
 
 ---
 
 ## Adding Tools
 
-Add tool functions to `src/agent/agent_tools.py`. Tools with no external dependencies are plain functions; tools that need the query engine or ChromaDB client use factory functions that close over the dependency:
+Add tool functions to `src/agent_setup/agent_tools.py`. Tools with no external dependencies are plain functions; tools that need a collection use factory functions that close over it:
 
 ```python
-def _make_my_tool(query_engine):
-    def my_tool(query: str) -> str:
+def _make_my_tool(collection: CollectionHandle):
+    async def my_tool(query: str) -> str:
         """Describe what this tool does — the LLM reads this."""
-        return str(query_engine.query(query))
+        return str(await collection.as_query_engine().aquery(query))
     return my_tool
 ```
 

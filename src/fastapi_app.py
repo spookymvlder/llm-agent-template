@@ -21,9 +21,9 @@ from src.models import (
     EvaluateResponse,
     HealthResponse,
 )
+from src.app_context import Profile
+from src.config import CONFIG as cfg
 from src.startup import bootstrap
-
-
 
 
 log = logging.getLogger(__name__)
@@ -32,11 +32,12 @@ log = logging.getLogger(__name__)
 # Application state
 # ---------------------------------------------------------------------------
 
+# TODO Phase 4: read these from app.state.ctx via a dependency instead of module globals.
 agent = None
-query_engine = None
+query_engine = None             # default collection; used by the evaluation routes
 evaluator_bundle: EvaluatorBundle | None = None
 memory = None                   # built after bootstrap
-max_iterations: int | None = None
+max_iterations: int = cfg.max_iterations
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -44,13 +45,13 @@ max_iterations: int | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, query_engine, evaluator_bundle, max_iterations, memory
-    result = bootstrap()
-    agent = result.agent
-    query_engine = result.query_engine
-    evaluator_bundle = result.evaluator_bundle
-    max_iterations = result.max_iterations
-    memory = result.memory
+    global agent, query_engine, evaluator_bundle, memory
+    ctx = bootstrap(Profile.SERVE)
+    app.state.ctx = ctx
+    agent = ctx.agent
+    query_engine = ctx.default_collection.as_query_engine()
+    evaluator_bundle = ctx.evaluator_bundle
+    memory = ctx.memory
     log.info(
         "Startup complete. evaluator=%s",
         "enabled" if evaluator_bundle else "disabled",

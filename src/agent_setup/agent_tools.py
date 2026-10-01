@@ -5,9 +5,11 @@ import logging
 import operator
 from datetime import datetime
 
-import chromadb
-from llama_index.core.query_engine import BaseQueryEngine
-from llama_index.core.tools import FunctionTool, QueryEngineTool, ToolMetadata
+from typing import Mapping
+
+from llama_index.core.tools import FunctionTool
+
+from src.indexing import CollectionHandle
 
 log = logging.getLogger(__name__)
 
@@ -60,55 +62,39 @@ def calculate(expression: str) -> str:
 # Factories — close over external dependencies
 # ---------------------------------------------------------------------------
 
-
-
-
-
-
-def _make_list_documents(chroma_client: chromadb.ClientAPI, collection_name: str):
-    def list_indexed_documents() -> str:
-        """Returns a list of document names currently available in the index."""
+def _make_list_documents(collections: Mapping[str, CollectionHandle]) -> FunctionTool:
+    def list_indexed_documents(collection: str) -> str:
         try:
-            collection = chroma_client.get_collection(collection_name)
-            results = collection.get(include=["metadatas"])
-            names = sorted({
-                m.get("file_name", "unknown")
-                for m in results["metadatas"]
-                if m
-            })
-            if not names:
-                return "No documents are currently indexed."
-            return "\n".join(names)
+            handle = collections[collection]
+        except KeyError:
+            return f"Unknown collection '{collection}'. Available: {', '.join(collections)}."
+        try:
+            # Reads every chunk's metadata — fine for modest corpora; replace with a document registry at scale.
+            results = handle.store.client.get_collection(handle.name).get(include=["metadatas"])
+            names = sorted({m.get("file_name", "unknown") for m in results["metadatas"] if m})
+            return "\n".join(names) if names else f"No documents are indexed in '{collection}'."
         except Exception as e:
-            log.warning("Failed to list documents: %s", e)
+            log.warning("Failed to list documents in '%s': %s", collection, e)
             return "Unable to retrieve document list."
-    return list_indexed_documents
+
+    return FunctionTool.from_defaults(
+        fn=list_indexed_documents,
+        name="list_indexed_documents",
+        description=(
+            "Lists the source document names in a collection. "
+            f"Available collections: {', '.join(collections)}."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def build_generic_tools(
-    query_engine: BaseQueryEngine,
-    chroma_client: chromadb.ClientAPI,
-    collection_name: str = "documents",
-) -> list:
-    summarize_tool = QueryEngineTool(
-        query_engine=query_engine,
-        metadata=ToolMetadata(
-            name="summarize_topic",
-            description=(
-                "Summarizes available information on a broad topic from the "
-                "document corpus. Use this when the user asks for an overview "
-                "or summary rather than a specific answer."
-            ),
-        ),
-    )
-
+def build_generic_tools(collections: Mapping[str, CollectionHandle]) -> list[FunctionTool]:
+    """Tools every agent can use. Search tools are added per collection by build_rag_agent()."""
     return [
         FunctionTool.from_defaults(fn=get_current_datetime),
         FunctionTool.from_defaults(fn=calculate),
-        FunctionTool.from_defaults(fn=_make_list_documents(chroma_client, collection_name)),
-        summarize_tool,
+        _make_list_documents(collections),
     ]

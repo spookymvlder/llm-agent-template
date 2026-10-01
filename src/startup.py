@@ -1,34 +1,32 @@
 from __future__ import annotations
 
+import json
 import logging
-
-from llama_index.core.agent.workflow import FunctionAgent
-from llama_index.core.base.base_query_engine import BaseQueryEngine
-from llama_index.core import Settings
-
-from dataclasses import dataclass
-
 import uuid
+import urllib.error
+import urllib.request
+from typing import Mapping, Sequence
 
-from src.agent_setup import build_rag_agent, build_generic_tools
-from src.llm import configure_llamaindex, build_llm_from_settings
+import chromadb
+from llama_index.core import Settings
+from llama_index.core.postprocessor.types import BaseNodePostprocessor
+
+from src.agent_setup import build_generic_tools, build_memory, build_rag_agent
+from src.app_context import DEFAULT_AGENT, AppContext, Profile
 from src.config import CONFIG as cfg
-from src.indexing import IndexManager, ChromaIndexManager
+from src.config_helpers import LlmSettings
+from src.evaluation import build_evaluator
+from src.indexing import CollectionHandle, open_collection
+from src.llm import build_llm_from_settings, configure_llamaindex
 from src.logging_setup import setup_logging
-from src.evaluation import build_evaluator, EvaluatorBundle
-from src.agent_setup import build_memory, Memory
+from src.providers import EmbeddingProvider, LLMProvider
 
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class BootstrapResult:
-    agent: FunctionAgent
-    query_engine: BaseQueryEngine
-    max_iterations: int
-    memory: Memory
-    evaluator_bundle: EvaluatorBundle | None = None
-    
+# ---------------------------------------------------------------------------
+# Stages
+# ---------------------------------------------------------------------------
 
 def _setup_logging() -> None:
     setup_logging(
@@ -39,109 +37,148 @@ def _setup_logging() -> None:
     )
 
 
-def _run_ingest(manager: IndexManager, chroma: ChromaIndexManager) -> None:
-    """Ingest any new documents from raw_dir into ChromaDB."""
-    result = manager.load_new_as_dataframe()
-    if result.df.empty:
-        log.info("Nothing to ingest — raw directory is empty or fully processed.")
+def _ollama_models_in_use(profile: Profile) -> set[str]:
+    """Ollama model names (LLMs and embedder) this profile will call."""
+    roles: list[LlmSettings | None] = []
+    if profile != Profile.INGEST:
+        roles.append(cfg.llm_settings)
+    if profile == Profile.SERVE:
+        roles.append(cfg.judge_llm_settings)
+    models = {r.model for r in roles if r and r.provider == LLMProvider.OLLAMA}
+    if cfg.embedder_settings.provider == EmbeddingProvider.OLLAMA:
+        models.add(cfg.embedder_settings.model)
+    return models
+
+
+def _check_ollama(profile: Profile) -> None:
+    """Fail fast if Ollama is needed but not running, and warn about models that haven't been pulled.
+
+    Raises:
+        RuntimeError: Ollama is unreachable or timed out.
+    """
+    models = _ollama_models_in_use(profile)
+    if not models:
         return
-    chroma.load_or_build(result.df)
-    manager.commit_processed(result.file_paths)
-    log.info("Ingestion complete: %d chunk(s) processed.", len(result.df))
+    base_url = cfg.llm_settings.base_url.rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{base_url}/api/tags", timeout=3.0) as response:
+            pulled = {m["name"] for m in json.load(response).get("models", [])}
+    except (urllib.error.URLError, TimeoutError) as e:
+        raise RuntimeError(
+            f"Ollama is not reachable at {base_url} ({e}). Start it with `ollama serve` and try again."
+        ) from e
+    for model in sorted(models):
+        if model not in pulled and f"{model}:latest" not in pulled:
+            log.warning("Ollama model '%s' is not pulled. Run `ollama pull %s`.", model, model)
 
 
-def _build_managers() -> tuple[IndexManager, ChromaIndexManager]:
-    # TODO Phase 2: build one handle per configured collection.
-    collection = cfg.default_collection
-    return (
-        IndexManager(raw_dir=collection.raw_dir, env_dir=cfg.env_dir),
-        ChromaIndexManager(
+def _open_collections(
+    names: Sequence[str] | None,
+    postprocessors: Mapping[str, Sequence[BaseNodePostprocessor]],
+) -> dict[str, CollectionHandle]:
+    selected = [cfg.collection(n) for n in names] if names else list(cfg.collections)
+    unknown = set(postprocessors) - {c.name for c in cfg.collections}
+    if unknown:
+        raise KeyError(f"Postprocessors given for unknown collection(s): {', '.join(sorted(unknown))}")
+
+    client = chromadb.PersistentClient(path=str(cfg.chroma_dir))
+    return {
+        c.name: open_collection(
+            c,
+            client=client,
             chroma_dir=cfg.chroma_dir,
-            text_column="text",
-            collection_name=collection.name,
+            manifest_dir=cfg.env_dir / "manifests",
             distance_metric=cfg.distance_metric,
-        ),
-    )
+            postprocessors=postprocessors.get(c.name, ()),
+        )
+        for c in selected
+    }
 
 
-def _build_query_engine(chroma: ChromaIndexManager):
-    result = chroma.load_or_build()
-    return result.index.as_query_engine(similarity_top_k=cfg.default_collection.top_k)
+def _ingest(collections: Mapping[str, CollectionHandle], reindex: bool) -> None:
+    for handle in collections.values():
+        if reindex:
+            log.info("Reindexing '%s'...", handle.name)
+            handle.reset()
+        result = handle.sync_files(reindex_changed=cfg.reindex_changed_files)
+        if result.new_files or result.changed_files:
+            log.info(
+                "Collection '%s': embedded %d new and %d changed file(s) (%d document(s) added, %d old chunk(s) removed).",
+                handle.name, len(result.new_files), len(result.changed_files),
+                result.documents_added, result.chunks_removed,
+            )
+
+
+def _warn_empty(collections: Mapping[str, CollectionHandle]) -> None:
+    for handle in collections.values():
+        if handle.count() == 0:
+            log.warning(
+                "Collection '%s' is empty. Add files to %s and run `python -m src.main ingest`, "
+                "or add documents at runtime.", handle.name, handle.settings.raw_dir,
+            )
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def ingest_only() -> None:
-    """Configure logging and run ingestion. Does not build an agent.
+def bootstrap(
+    profile: Profile = Profile.SERVE,
+    *,
+    collections: Sequence[str] | None = None,
+    reindex: bool = False,
+    postprocessors: Mapping[str, Sequence[BaseNodePostprocessor]] | None = None,
+) -> AppContext:
+    """Build everything the given profile needs and return it as an AppContext.
 
-    Used by: main.py `ingest` subcommand.
+    Stages: logging → config validation → Ollama check → LlamaIndex settings → collections
+    (+ ingest) → agents → evaluator → memory. INGEST stops after collections.
+
+    New files are ingested when the profile is INGEST, or when AUTO_INGEST is enabled; changed files
+    too if REINDEX_CHANGED_FILES is enabled.
+
+    Args:
+        profile:        What to build; see Profile.
+        collections:    Names of collections to open. Default: all of COLLECTIONS.
+        reindex:        Delete and re-embed the opened collections before ingesting (implies ingest).
+        postprocessors: Node postprocessors per collection name, applied after retrieval and
+                        before the LLM (e.g. {"rules": [EditionNotePostprocessor()]}).
+
+    Raises:
+        ConfigError:  Invalid configuration.
+        RuntimeError: Ollama needed but unreachable.
     """
     _setup_logging()
-    cfg.validate()
-    configure_llamaindex(cfg.llm_settings, cfg.embedder_settings)
-    manager, chroma = _build_managers()
-    _run_ingest(manager, chroma)
+    needs_llm = profile != Profile.INGEST
+    cfg.validate(check_llm_keys=needs_llm)
+    log.debug(cfg.to_log_str())
+    _check_ollama(profile)
+    configure_llamaindex(cfg.llm_settings if needs_llm else None, cfg.embedder_settings)
 
+    handles = _open_collections(collections, postprocessors or {})
+    if profile == Profile.INGEST or cfg.auto_ingest or reindex:
+        _ingest(handles, reindex)
+    _warn_empty(handles)
 
-def bootstrap() -> BootstrapResult:
-    """Full startup sequence: logging, LlamaIndex, optional ingest, agent.
+    ctx = AppContext(profile=profile, collections=handles)
+    if profile == Profile.INGEST:
+        return ctx
 
-    Safe to call from both main.py and the FastAPI lifespan. Always
-    configures logging so the app is properly instrumented regardless
-    of how it was started (CLI, uvicorn, Docker, etc.).
-
-    Used by: FastAPI lifespan, main.py `serve` and `chat` subcommands.
-    """
-    _setup_logging()
-    cfg.validate()
-    configure_llamaindex(cfg.llm_settings, cfg.embedder_settings)
-
-    manager, chroma = _build_managers()
-
-    if cfg.auto_ingest and manager.ingested_count() == 0:
-        log.info("Index is empty and auto_ingest is enabled — ingesting now...")
-        _run_ingest(manager, chroma)
-
-    if manager.ingested_count() == 0:
-        log.warning(
-            "ChromaDB collection is empty. The agent will have no documents to search. "
-            "Add documents to %s and run ingest.", cfg.default_collection.raw_dir
-        )
-
-    query_engine = _build_query_engine(chroma)
-    tools = build_generic_tools(
-        query_engine=query_engine,
-        chroma_client=chroma.client,      # expose _client as a property on ChromaIndexManager
-        collection_name=cfg.default_collection.name,
+    ctx.agents[DEFAULT_AGENT] = build_rag_agent(
+        collections=list(handles.values()),
+        extra_tools=build_generic_tools(handles),
     )
-    
-    agent = build_rag_agent(query_engine=query_engine, extra_tools=tools)
     log.info("Agent ready.")
 
-
-
-
-    evaluator_bundle = None
-    if cfg.judge_llm_settings:
-        judge_llm = build_llm_from_settings(cfg.judge_llm_settings)
-        evaluator_bundle = build_evaluator(judge_llm)
+    if profile == Profile.SERVE and cfg.judge_llm_settings:
+        ctx.evaluator_bundle = build_evaluator(build_llm_from_settings(cfg.judge_llm_settings))
         log.info("Evaluator ready.")
 
-    memory = build_memory(
+    ctx.memory = build_memory(
         session_id=str(uuid.uuid4()),
-        llm=Settings.llm,           # available here naturally
+        llm=Settings.llm,
         token_limit=cfg.memory_token_limit,
         enable_fact_extraction=cfg.enable_fact_extraction,
         max_facts=cfg.max_facts,
     )
-    
-
-    return BootstrapResult(
-        agent=agent, 
-        evaluator_bundle=evaluator_bundle, 
-        query_engine=query_engine,
-        max_iterations=cfg.max_iterations,
-        memory=memory,
-        )
+    return ctx

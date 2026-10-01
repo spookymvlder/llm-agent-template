@@ -119,3 +119,4 @@ class CollectionSettings:
     name: str
     raw_dir: Path
     top_k: int
+    description: str       # shown to the agent so it knows when to search this collection

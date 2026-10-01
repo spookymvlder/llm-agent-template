@@ -12,35 +12,46 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
 
 from src.config import CONFIG as cfg
-from src.startup import bootstrap, ingest_only
-
-
+from src.app_context import Profile
+from src.startup import bootstrap
 
 
 log = logging.getLogger(__name__)
 
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8000
 
-async def chat() -> None:
+
+async def chat(question: str | None = None) -> None:
     """
-    Interactive CLI chat against the agent.
+    Interactive CLI chat against the agent. With a question, answers it once and exits.
 
     Requires main to be run with command line argument 'chat'.
     """
-    result = bootstrap()
-    agent = result.agent
-    memory = result.memory
+    ctx = bootstrap(Profile.CHAT)
+
+    async def ask(message: str) -> str:
+        return str(await ctx.agent.run(user_msg=message, max_iterations=cfg.max_iterations, memory=ctx.memory))
+
+    if question:
+        print(await ask(question))
+        return
 
     print("Chat started. Type 'quit' to exit.\n")
     while True:
         user_input = input("You: ").strip()
         if user_input.lower() in ("quit", "exit"):
             break
-        response = await agent.run(
-            user_msg=user_input,
-            max_iterations=result.max_iterations,
-            memory=memory,
-        )
-        print(f"Agent: {response}\n")
+        if user_input:
+            print(f"Agent: {await ask(user_input)}\n")
+
+
+def ingest(collections: list[str] | None, reindex: bool) -> None:
+    """Ingest new files into the vector store (all collections unless some are named) and exit."""
+    ctx = bootstrap(Profile.INGEST, collections=collections, reindex=reindex)
+    for handle in ctx.collections.values():
+        print(f"{handle.name}: {handle.count()} chunk(s) indexed from {handle.settings.raw_dir}")
+
 
 def main() -> None:
     """
@@ -55,18 +66,37 @@ def main() -> None:
     """
     parser = argparse.ArgumentParser(description="LLM Agent")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("serve",  help="Start the FastAPI server (default)")
-    sub.add_parser("chat",   help="Interactive CLI chat")
-    sub.add_parser("ingest", help="Ingest new documents without starting the server")
+
+    serve_p = sub.add_parser("serve", help="Start the FastAPI server (default)")
+    serve_p.add_argument("--host", default=DEFAULT_HOST)
+    serve_p.add_argument("--port", type=int, default=DEFAULT_PORT)
+
+    chat_p = sub.add_parser("chat", help="Interactive CLI chat")
+    chat_p.add_argument("-q", "--question", help="Ask one question, print the answer and exit")
+
+    ingest_p = sub.add_parser("ingest", help="Ingest new documents without starting the server")
+    ingest_p.add_argument(
+        "-c", "--collection", action="append", dest="collections", metavar="NAME",
+        help="Only ingest this collection (repeatable). Default: all collections.",
+    )
+    ingest_p.add_argument(
+        "--reindex", action="store_true",
+        help="Delete the collection(s) and re-embed every file. Needed after changing the embedding "
+             "model, chunk settings or distance metric.",
+    )
     args = parser.parse_args()
 
     if args.command in ("serve", None):
-        uvicorn.run("src.fastapi_app:app", host="127.0.0.1", port=8000, reload=cfg.debug)
-    # TODO disable evaluator from chat.
+        uvicorn.run(
+            "src.fastapi_app:app",
+            host=getattr(args, "host", DEFAULT_HOST),
+            port=getattr(args, "port", DEFAULT_PORT),
+            reload=cfg.debug,
+        )
     elif args.command == "chat":
-        asyncio.run(chat())
+        asyncio.run(chat(args.question))
     elif args.command == "ingest":
-        ingest_only()
+        ingest(args.collections, args.reindex)
 
 if __name__ == "__main__":
     main()

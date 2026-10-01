@@ -13,6 +13,11 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 
 log = logging.getLogger(__name__)
 
+# LlamaIndex stores each chunk's parent document id under this Chroma metadata key.
+_DOC_ID_KEY = "document_id"
+# Max ids per Chroma `$in` lookup when checking which documents already exist.
+_LOOKUP_BATCH = 500
+
 
 @dataclass
 class IndexBuildResult:
@@ -21,10 +26,12 @@ class IndexBuildResult:
 
 
 class ChromaIndexManager:
-    """Maintains a ChromaDB-backed VectorStoreIndex.
+    """Maintains a ChromaDB-backed VectorStoreIndex for one collection.
 
     - Accepts a pandas DataFrame as input instead of raw files.
-    - Uses document IDs to skip already-embedded rows (idempotent upserts).
+    - Uses document IDs to skip already-embedded rows (idempotent inserts).
+      Each document is split into chunks at embedding time; Chroma stores one
+      entry per chunk, tagged with its parent document id.
     - Returns a LlamaIndex VectorStoreIndex so the rest of your agent code
       (query engine, tools) needs no changes.
 
@@ -33,11 +40,13 @@ class ChromaIndexManager:
         collection_name: Name of the ChromaDB collection to use.
         text_column:    DataFrame column containing the text to embed.
         id_column:      DataFrame column to use as the document ID.
-                        Must be unique per row. If None, row index is used.
+                        Must be unique per document and stable across runs, or
+                        re-ingesting will create duplicates. If None, the row index is used.
         metadata_columns: Columns to store as document metadata.
-                        If None, all columns except text_column are used.
+                        If None, all columns except text_column and id_column are used.
         distance_metric: HNSW space for new collections: 'cosine', 'l2' or 'ip'.
                         Ignored for collections that already exist.
+        client:         Shared ChromaDB client. One is created for chroma_dir if not given.
     """
 
     def __init__(
@@ -49,6 +58,7 @@ class ChromaIndexManager:
         id_column: str | None = None,
         metadata_columns: list[str] | None = None,
         distance_metric: str = "cosine",
+        client: chromadb.ClientAPI | None = None,
     ) -> None:
         self.chroma_dir = chroma_dir
         self.collection_name = collection_name
@@ -57,8 +67,10 @@ class ChromaIndexManager:
         self.metadata_columns = metadata_columns
         self.distance_metric = distance_metric
 
-        self.chroma_dir.mkdir(parents=True, exist_ok=True)
-        self._client = chromadb.PersistentClient(path=str(self.chroma_dir))
+        if client is None:
+            self.chroma_dir.mkdir(parents=True, exist_ok=True)
+            client = chromadb.PersistentClient(path=str(self.chroma_dir))
+        self._client = client
 
 
     # ------------------------------------------------------------------
@@ -69,97 +81,107 @@ class ChromaIndexManager:
     def client(self) -> chromadb.ClientAPI:
         return self._client
 
+    def count(self) -> int:
+        """Number of stored chunks (not documents) in the collection."""
+        return self._collection().count()
+
     def load_or_build(self, df: pd.DataFrame | None = None) -> IndexBuildResult:
-        """Load the existing index, optionally adding new rows from df.
+        """Load the index, embedding any rows from df whose document IDs are not already stored.
 
-        - If no collection exists yet, df is required to build from scratch.
-        - If a collection exists, only rows whose IDs are not already stored
-          will be embedded and inserted.
-        - If df is None and the collection already exists, the index is loaded
-          as-is (useful when re-attaching to a fully-built index at startup).
+        With df=None (or all rows already stored) the index is loaded as-is. An empty
+        collection yields an empty index, which is valid — documents can be added later.
         """
-        collection = self._client.get_or_create_collection(
-            self.collection_name,
-            metadata={"hnsw:space": self.distance_metric},
-        )
+        collection = self._collection()
         vector_store = ChromaVectorStore(chroma_collection=collection)
-        storage_context = StorageContext.from_defaults(vector_store=vector_store)
-
-        existing_ids: set[str] = set(collection.get(include=[])["ids"])
-        log.info("Collection '%s': %d documents already indexed.", self.collection_name, len(existing_ids))
+        log.info("Collection '%s': %d chunk(s) indexed.", self.collection_name, collection.count())
 
         newly_processed: list[str] = []
-
-        if df is not None:
-            new_docs, new_ids = self._new_documents(df, existing_ids)
-
+        if df is not None and not df.empty:
+            new_docs = self._new_documents(df, collection)
             if new_docs:
-                log.info("Embedding %d new document(s)...", len(new_docs))
-                if existing_ids:
-                    # Add to existing index
-                    index = VectorStoreIndex.from_vector_store(vector_store)
-                    for doc in new_docs:
-                        index.insert(doc)
-                else:
-                    # Build fresh index
-                    index = VectorStoreIndex.from_documents(
-                        new_docs,
-                        storage_context=storage_context,
-                        show_progress=True,
-                    )
-                newly_processed = new_ids
+                log.info("Embedding %d new document(s) into '%s'...", len(new_docs), self.collection_name)
+                # from_documents appends to the existing vector store; it does not replace it.
+                VectorStoreIndex.from_documents(
+                    new_docs,
+                    storage_context=StorageContext.from_defaults(vector_store=vector_store),
+                    show_progress=True,
+                )
+                newly_processed = [d.doc_id for d in new_docs]
                 log.info("Indexed %d new document(s).", len(new_docs))
             else:
                 log.info("No new documents to index.")
-                index = VectorStoreIndex.from_vector_store(vector_store)
-        else:
-            if not existing_ids:
-                raise ValueError(
-                    "Collection is empty and no DataFrame was provided. "
-                    "Pass a DataFrame to build_or_load() on first run."
-                )
-            log.info("Loading existing index (no DataFrame provided).")
-            index = VectorStoreIndex.from_vector_store(vector_store)
 
-        return IndexBuildResult(index=index, newly_processed=newly_processed)
+        return IndexBuildResult(
+            index=VectorStoreIndex.from_vector_store(vector_store),
+            newly_processed=newly_processed,
+        )
+
+    def delete_where(self, key: str, values: list[str]) -> int:
+        """Delete every chunk whose metadata `key` is one of `values` (e.g. all chunks of a changed file).
+
+        Returns:
+            Number of chunks deleted.
+        """
+        collection = self._collection()
+        before = collection.count()
+        for i in range(0, len(values), _LOOKUP_BATCH):
+            collection.delete(where={key: {"$in": values[i:i + _LOOKUP_BATCH]}})
+        return before - collection.count()
+
+    def delete_collection(self) -> None:
+        """Delete the collection and all its vectors. The next load_or_build() recreates it empty."""
+        try:
+            self._client.delete_collection(self.collection_name)
+            log.info("Deleted collection '%s'.", self.collection_name)
+        except Exception as e:  # chromadb raises different types across versions when it doesn't exist
+            log.info("Collection '%s' not deleted (%s).", self.collection_name, e)
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
+    def _collection(self):
+        return self._client.get_or_create_collection(
+            self.collection_name,
+            metadata={"hnsw:space": self.distance_metric},
+        )
+
     def _resolve_metadata_columns(self, df: pd.DataFrame) -> list[str]:
         if self.metadata_columns is not None:
             return self.metadata_columns
-        return [c for c in df.columns if c != self.text_column]
+        return [c for c in df.columns if c not in (self.text_column, self.id_column)]
 
     def _row_id(self, row: pd.Series, idx: int) -> str:
         if self.id_column and self.id_column in row.index:
             return str(row[self.id_column])
         return str(idx)
 
-    def _new_documents(
-        self, df: pd.DataFrame, existing_ids: set[str]
-    ) -> tuple[list[Document], list[str]]:
+    def _existing_doc_ids(self, collection, doc_ids: list[str]) -> set[str]:
+        existing: set[str] = set()
+        for i in range(0, len(doc_ids), _LOOKUP_BATCH):
+            batch = doc_ids[i:i + _LOOKUP_BATCH]
+            found = collection.get(where={_DOC_ID_KEY: {"$in": batch}}, include=["metadatas"])
+            existing.update(m[_DOC_ID_KEY] for m in found["metadatas"] if m and _DOC_ID_KEY in m)
+        return existing
+
+    def _new_documents(self, df: pd.DataFrame, collection) -> list[Document]:
         meta_cols = self._resolve_metadata_columns(df)
+        rows = [(self._row_id(row, idx), row) for idx, row in df.iterrows()]
+        existing = self._existing_doc_ids(collection, [doc_id for doc_id, _ in rows])
+
         docs: list[Document] = []
-        ids: list[str] = []
-
-        for idx, row in df.iterrows():
-            doc_id = self._row_id(row, idx)
-            if doc_id in existing_ids:
+        seen: set[str] = set()
+        for doc_id, row in rows:
+            if doc_id in existing or doc_id in seen:
                 continue
-
+            seen.add(doc_id)
             metadata = {col: _safe_meta(row.get(col)) for col in meta_cols}
-            docs.append(
-                Document(
-                    text=str(row[self.text_column]),
-                    metadata=metadata,
-                    id_=doc_id,
-                )
-            )
-            ids.append(doc_id)
+            docs.append(Document(text=str(row[self.text_column]), metadata=metadata, id_=doc_id))
 
-        return docs, ids
+        skipped = len(rows) - len(docs)
+        if skipped:
+            log.info("Skipped %d document(s) already in '%s' or duplicated in the input.", skipped, self.collection_name)
+        return docs
 
 
 def _safe_meta(value) -> str | int | float | bool:
