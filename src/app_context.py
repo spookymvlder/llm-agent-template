@@ -19,10 +19,12 @@ class Profile(StrEnum):
     INGEST: collections only (no LLM needed).
     CHAT:   collections + agents + conversation memory (CLI; no evaluator).
     SERVE:  CHAT + evaluator if a judge is configured (FastAPI).
+    EVAL:   SERVE's components, for the golden-set harness (`python -m src.main eval`).
     """
     INGEST = auto()
     CHAT   = auto()
     SERVE  = auto()
+    EVAL   = auto()
 
 
 @dataclass

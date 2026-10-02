@@ -59,6 +59,29 @@ def ingest(collections: list[str] | None, reindex: bool, include_manual: bool) -
         print(f"{handle.name}: {handle.count()} chunk(s) indexed from {handle.settings.raw_dir}")
 
 
+def evaluate(golden: Path, name: str | None, top_k: int | None, include_answer: bool,
+             include_ragas: bool, compare: str | None) -> None:
+    """Run a golden set and write a report (see src/evaluation/harness.py)."""
+    from datetime import datetime
+    from src.evaluation.harness import load_golden, run_eval
+
+    cases = load_golden(golden)
+    ctx = bootstrap(Profile.EVAL)
+    if ctx.evaluator_bundle is None:
+        log.warning("JUDGE_MODEL is not set: judge metrics (faithfulness, relevancy, correctness) are skipped.")
+    run_name = name or datetime.now().strftime("%Y%m%d-%H%M%S")
+    report = asyncio.run(run_eval(
+        ctx, cases, run_name=run_name, max_iterations=cfg.max_iterations, concurrency=cfg.eval_concurrency,
+        top_k=top_k, include_answer=include_answer, include_ragas=include_ragas,
+        out_dir=cfg.eval_dir, compare=compare,
+    ))
+    width = max(len(k) for k in report.aggregate)
+    for key, value in report.aggregate.items():
+        delta = report.deltas.get(key) if report.deltas else None
+        print(f"{key:<{width}}  {value}" + (f"  ({delta:+.4f})" if delta is not None else ""))
+    print(f"\nReport: {cfg.eval_dir / run_name / 'report.md'}")
+
+
 def main() -> None:
     """
     Main access function. Can alternatively be launched through fastapi_app.py if just interested in launching server.
@@ -69,6 +92,7 @@ def main() -> None:
                 environment mode is set to 'dev'.
     chat:    allows the user to chat with the RAG agent directly without utilizing FastAPI endpoints.
     ingest:  builds the vector database, which persists locally, and quits without launching the RAG agent.
+    eval:    runs a golden set (questions with expected routes/sources/answers) and writes a report.
     """
     parser = argparse.ArgumentParser(description="LLM Agent")
     sub = parser.add_subparsers(dest="command")
@@ -94,6 +118,14 @@ def main() -> None:
         "--manual", action="store_true", dest="include_manual",
         help="Also embed new/changed files in folders marked {\"_mode\": \"manual\"}.",
     )
+    eval_p = sub.add_parser("eval", help="Run a golden set and write a report to data/<env>/evaluation/<run>/")
+    eval_p.add_argument("golden", type=Path, help="Golden set (.json or .jsonl); see examples/golden.example.json")
+    eval_p.add_argument("--name", help="Run name (default: timestamp)")
+    eval_p.add_argument("--compare", metavar="RUN", help="Show the change against a previous run's aggregate")
+    eval_p.add_argument("--top-k", type=int, help="Retrieval depth for the retrieval metrics (default: each collection's top_k)")
+    eval_p.add_argument("--no-answer", dest="include_answer", action="store_false",
+                        help="Skip running the agent (route + retrieval metrics only; fast, no LLM answers)")
+    eval_p.add_argument("--ragas", action="store_true", help="Add RAGAS metrics (pip install -r requirements-eval.txt)")
     args = parser.parse_args()
 
     if args.command in ("serve", None):
@@ -107,6 +139,8 @@ def main() -> None:
         asyncio.run(chat(args.question))
     elif args.command == "ingest":
         ingest(args.collections, args.reindex, args.include_manual)
+    elif args.command == "eval":
+        evaluate(args.golden, args.name, args.top_k, args.include_answer, args.ragas, args.compare)
 
 if __name__ == "__main__":
     main()

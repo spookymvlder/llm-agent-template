@@ -40,6 +40,7 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 # 3. Install dependencies
 pip install -r requirements.txt
 # for tests: pip install -r requirements-dev.txt
+# for RAGAS in eval runs: pip install -r requirements-eval.txt
 
 # 4. Create your .env file
 cp .env.example .env
@@ -160,10 +161,14 @@ src/
   chat.py                   # respond() / answer(): route (if enabled) then run the handler
   config.py                 # AppConfig dataclass, loaded from .env
   config_helpers.py         # Coercion helpers, settings dataclasses
-  evaluation.py             # EvaluatorBundle, evaluate_response()
+  evaluation/
+    live.py                 # EvaluatorBundle, evaluate_response() / evaluate_answer()
+    harness.py              # Golden-set runs: route, retrieval, answer, judge → report
+    metrics.py              # Hit rate, precision, recall, MRR, nDCG
+    ragas_eval.py           # Optional RAGAS metrics
   fastapi_app.py            # FastAPI app, routes, SSE streaming
   logging_setup.py          # Logging configuration
-  main.py                   # CLI entry point (serve / chat / ingest)
+  main.py                   # CLI entry point (serve / chat / ingest / eval)
   models.py                 # Pydantic models for API schemas
   providers.py              # LLMProvider and EmbeddingProvider enums
   schema.py                 # DocumentSchema: text/metadata columns, tabular mode, metadata visibility
@@ -349,14 +354,38 @@ Register it in `build_generic_tools()` and it will be passed to the agent as `ex
 
 ## Evaluation
 
-If `JUDGE_PROVIDER` and `JUDGE_MODEL` are set, the evaluator is enabled. The judge LLM should differ from the primary LLM to avoid a model evaluating its own outputs.
+If `JUDGE_MODEL` is set (optionally `JUDGE_PROVIDER`), the evaluator is enabled. The judge LLM should differ from the primary LLM to avoid a model evaluating its own outputs.
 
 ```env
 JUDGE_PROVIDER=openai
 JUDGE_MODEL=gpt-4o
 ```
 
-Evaluation runs faithfulness, relevancy, and guideline checks against each response. Results are accessible via `/evaluate` and `/chat_and_evaluate`, and structured as:
+### Golden-set regression runs
+
+Write a golden set — questions with whatever you know about the right answer — and run it after changing a model, chunking, prompt or route to see whether things got better or worse:
+
+```bash
+python -m src.main eval examples/golden.example.json --name baseline
+python -m src.main eval examples/golden.example.json --name smaller-chunks --compare baseline
+python -m src.main eval golden.json --no-answer       # route + retrieval only: fast, no agent runs
+python -m src.main eval golden.json --ragas           # + RAGAS (pip install -r requirements-eval.txt)
+```
+
+Each case needs only a `question`; each check runs when its field is present (see `examples/golden.example.json`):
+
+| Field | Check |
+|---|---|
+| `expected_route` | Router accuracy (router enabled) |
+| `expected_sources` (+ `collection`, `filters`) | Retrieval hit rate, precision, recall, MRR, nDCG @k — the collection is searched directly, so it measures retrieval, not the agent's tool choice. Sources match doc ids, source paths (`2024/PHB.pdf` matches all its chunks) or stream ids |
+| always (unless `--no-answer`) | Full pipeline answer (fresh conversation per case), latency, sources used; with a judge: faithfulness, relevancy, guideline pass rate |
+| `reference_answer` | Judge correctness score (1–5) |
+
+Reports go to `data/<env>/evaluation/<run>/report.json` and `report.md` (settings, aggregate with deltas against `--compare`, one row per case, retrieval misses). `EVAL_CONCURRENCY` runs cases in parallel; judge calls respect `JUDGE_RATE_LIMIT_RPM`. RAGAS (faithfulness, response relevancy, context precision) needs a capable judge — small local models often fail its structured output; failed samples are counted, not fatal.
+
+### Live evaluation
+
+The `/evaluate` and `/chat_and_evaluate` endpoints run faithfulness, relevancy, and guideline checks against a single response, structured as:
 
 ```json
 {

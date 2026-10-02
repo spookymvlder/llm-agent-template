@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from llama_index.core.evaluation import (
+    CorrectnessEvaluator,
     FaithfulnessEvaluator,
     GuidelineEvaluator,
     RelevancyEvaluator,
@@ -20,7 +21,6 @@ log = logging.getLogger(__name__)
 
 DEFAULT_GUIDELINES: list[str] = [
     "The response should be factual and grounded in the retrieved documents.",
-    "The response should not make causal claims from correlational data.",
     "The response should acknowledge uncertainty where the source documents are ambiguous.",
 ]
 
@@ -36,10 +36,13 @@ class EvaluatorBundle:
     faithfulness and relevancy are always present.
     guidelines is a list of GuidelineEvaluators, one per guideline string,
     and may be empty if no guidelines were provided.
+    correctness compares an answer with a reference answer (used by the eval harness).
     """
     faithfulness: FaithfulnessEvaluator
     relevancy: RelevancyEvaluator
     guidelines: list[GuidelineEvaluator] = field(default_factory=list)
+    correctness: CorrectnessEvaluator | None = None
+    llm: Any = None   # the judge LLM (e.g. for RAGAS)
 
     @property
     def has_guidelines(self) -> bool:
@@ -126,6 +129,8 @@ def build_evaluator(
         faithfulness=FaithfulnessEvaluator(llm=llm),
         relevancy=RelevancyEvaluator(llm=llm),
         guidelines=guideline_evaluators,
+        correctness=CorrectnessEvaluator(llm=llm),
+        llm=llm,
     )
 
 

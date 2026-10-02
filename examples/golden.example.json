@@ -1,0 +1,25 @@
+{
+  "_about": "Golden set for `python -m src.main eval examples/golden.example.json`. Only `question` is required; each check runs when its field is present. expected_sources match doc ids, source paths ('2024/PHB.pdf' matches every chunk of that file) or stream ids.",
+  "cases": [
+    {
+      "id": "grapple-2024",
+      "question": "How does grappling work?",
+      "collection": "rules",
+      "expected_route": "rag",
+      "expected_sources": ["2024/grapple.txt"],
+      "reference_answer": "Grappling is an Unarmed Strike option; the target makes a saving throw to avoid it.",
+      "filters": {"edition": "2024"}
+    },
+    {
+      "id": "dragon-direction",
+      "question": "Which way did the dragon flee in session 12?",
+      "collection": "transcripts",
+      "expected_sources": ["session-12"]
+    },
+    {
+      "id": "greeting",
+      "question": "Hi there!",
+      "expected_route": "direct"
+    }
+  ]
+}

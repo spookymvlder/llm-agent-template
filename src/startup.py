@@ -49,7 +49,7 @@ def _ollama_models_in_use(profile: Profile) -> set[str]:
     roles: list[LlmSettings | None] = []
     if profile != Profile.INGEST:
         roles.append(cfg.llm_settings)
-    if profile == Profile.SERVE:
+    if profile in (Profile.SERVE, Profile.EVAL):
         roles.append(cfg.judge_llm_settings)
     if profile != Profile.INGEST and cfg.enable_router:
         roles.append(cfg.router_llm_settings)
@@ -204,7 +204,7 @@ def bootstrap(
         log.info("Router ready: routes=%s default=%s model=%s",
                  list(ctx.router.routes), cfg.router_default_route, cfg.router_llm_settings.model)
 
-    if profile == Profile.SERVE and cfg.judge_llm_settings:
+    if profile in (Profile.SERVE, Profile.EVAL) and cfg.judge_llm_settings:
         ctx.evaluator_bundle = build_evaluator(build_llm_from_settings(cfg.judge_llm_settings))
         log.info("Evaluator ready.")
 
