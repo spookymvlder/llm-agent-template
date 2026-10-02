@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 
 _STREAM_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MANIFEST_VERSION = 1
+_LIVE = "live"   # embedded_sha256 marker: an open stream whose fragments were embedded as they arrived
 
 
 class Granularity(StrEnum):
@@ -105,7 +106,11 @@ class StreamManager:
         path = self.path(stream_id)
         with self._lock:
             streams = self._load()
-            info = streams.get(stream_id) or StreamInfo(stream_id)
+            info = streams.get(stream_id)
+            if info is None:
+                # A new stream's fragments are embedded as they arrive, so it never needs replaying — until a
+                # reindex clears this marker (clear_embedded), after which sync() replays it from the file.
+                info = StreamInfo(stream_id, embedded_sha256=_LIVE)
             if not info.open:
                 raise StreamClosed(f"Stream '{stream_id}' is closed.")
             fragment = Fragment(

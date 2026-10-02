@@ -6,15 +6,46 @@ A production-oriented RAG agent template built on LlamaIndex and FastAPI. Design
 
 ## Features
 
-- Multi-provider LLM support: Ollama (local), OpenAI, Anthropic, Google GenAI
-- ChromaDB-backed vector store with environment-isolated persistence
-- Document ingestion pipeline with manifest-based change tracking
-- FastAPI web interface with streaming chat (SSE), evaluation endpoints, and Jinja2 templates
-- LlamaIndex workflow-based agents (`FunctionAgent` / `ReActAgent`) with long-term memory blocks
-- RAG evaluation via `FaithfulnessEvaluator`, `RelevancyEvaluator`, and `GuidelineEvaluator`
-- Optional judge LLM for LLM-as-evaluator workflows
-- Dev / test / prod environment isolation
-- CLI with `serve`, `chat`, and `ingest` subcommands
+- Multi-provider LLMs: Ollama (local), OpenAI, Anthropic, Google GenAI — separately configurable for the agent, an optional router and an evaluation judge, with rate limits and Ollama thinking control
+- Multiple named ChromaDB collections, each with its own folder, search tool and description
+- File ingestion with SHA-256 change detection, folder-level `_metadata.json`, static/manual update modes, and tabular (CSV/JSONL/Parquet) collections
+- Runtime ingestion: append-only **streams** (e.g. live transcripts) searchable immediately and re-chunked on close, plus ad-hoc documents
+- Search tools return chunks *with metadata*; every chat response lists its `sources`
+- Optional LLM router with pluggable routes (agents, fixed replies, or any custom handler)
+- Per-collection preprocessing steps and retrieval postprocessors
+- FastAPI app with streaming chat (SSE), per-conversation memory, retrieval/ingest/stream/summary endpoints and a small web UI
+- Golden-set evaluation harness (route accuracy, retrieval metrics, judged answers, run-to-run deltas; optional RAGAS)
+- Dev / test / prod environment isolation; CLI with `serve`, `chat`, `ingest` and `eval`
+- Test suite that runs offline (mock embedder and scripted LLMs)
+
+## How it fits together
+
+```
+.env → AppConfig (config.py) ──► bootstrap(profile) (startup.py) ──► AppContext (app_context.py)
+                                                                      ├─ collections: {name: CollectionHandle}
+data/raw/<collection>/  ── IndexManager (files, manifest) ─┐         │    store (Chroma) · files · streams
+data/<env>/streams/     ── StreamManager (JSONL) ──────────┼─► sync ─┤    preprocess → embed → search
+POST /documents ───────────────────────────────────────────┘         ├─ agents: {"rag", "direct", ...}
+                                                                      ├─ router (optional) · evaluator (judge)
+                                                                      └─ conversations (memory per id)
+FastAPI (fastapi_app.py) / CLI (main.py) ── chat.respond(): router → route handler → agent → answer + sources
+```
+
+`bootstrap()` builds only what a profile needs: `INGEST` (collections, no LLM), `CHAT`, `SERVE` (adds the evaluator), `EVAL`. Everything it builds lives on the `AppContext`, which FastAPI keeps on `app.state.ctx`.
+
+### Extension points
+
+| To... | Use |
+|---|---|
+| Add a corpus | `COLLECTIONS=...` + `COLLECTION_<NAME>_DESCRIPTION` |
+| Tag documents | `_metadata.json` in folders, `metadata` on `/documents` and `/streams`, or a preprocessing step |
+| Read a table as documents | `CollectionOptions(schema=DocumentSchema(tabular=True, ...))` |
+| Transform rows before embedding | `CollectionOptions(steps=[fn])` |
+| Act on retrieved chunks (e.g. by metadata) | `CollectionOptions(postprocessors=[...])`, or branch on `sources` in your code |
+| Add a tool | `agent_tools.py`, passed to `build_rag_agent(extra_tools=...)` |
+| Add a specialised agent | `build_rag_agent([ctx.collection("rules")])` → `ctx.agents["rules"]` |
+| Add a route | `bootstrap(routes=[...RouteSpec(...)])` with `ENABLE_ROUTER=true` |
+| Measure a change | `python -m src.main eval golden.json --compare <previous run>` |
 
 ---
 
@@ -175,13 +206,17 @@ src/
   startup.py                # bootstrap(profile) — builds an AppContext
 
 data/
-  raw/<collection>/         # Drop documents here for ingestion
-  dev/                      # Dev environment data (chroma/, manifests/, streams/<collection>/)
+  raw/<collection>/         # Drop documents here for ingestion (shared by all environments)
+  dev/                      # Dev environment data (chroma/, manifests/, streams/, evaluation/)
   test/
   prod/
 
 templates/
-  index.html                # Web UI (chat, evaluate, chat+eval tabs)
+  index.html                # Web UI (chat, retrieve, evaluate, chat+eval tabs)
+examples/
+  golden.example.json       # Golden-set format for `python -m src.main eval`
+tests/                      # Offline pytest suite (mock embedder, scripted LLMs)
+requirements.txt            # + requirements-dev.txt (tests), requirements-eval.txt (RAGAS)
 ```
 
 ---
@@ -398,9 +433,20 @@ The `/evaluate` and `/chat_and_evaluate` endpoints run faithfulness, relevancy, 
 
 ---
 
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+The suite runs offline in a temporary data directory: LlamaIndex's mock embedder replaces the embedding model, and scripted mock LLMs stand in for the agent, router and judge, so no Ollama instance, model download or API key is needed. `tests/test_api.py` drives the real FastAPI app with a hand-built `AppContext`; use the same pattern (override `bootstrap`, or the `get_ctx` dependency) to test project routes.
+
+---
+
 ## Environment Isolation
 
-Each environment (`dev`, `test`, `prod`) maintains its own ChromaDB collection and ingestion manifest under `data/{env}/`. Raw documents in `data/raw/` are shared across environments. Set `ENVIRONMENT=prod` in your deployment environment to use the production data directory.
+Each environment (`dev`, `test`, `prod`) maintains its own ChromaDB collections, ingestion manifests, stream files and evaluation reports under `data/{env}/`. Raw documents in `data/raw/` are shared across environments. Set `ENVIRONMENT=prod` in your deployment environment to use the production data directory.
 
 ---
 

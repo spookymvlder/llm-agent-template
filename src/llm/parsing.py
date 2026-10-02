@@ -30,7 +30,9 @@ def parse_llm_json(text: str) -> dict:
       - Markdown code fences and prose around the object
       - Python literals (None/True/False)
       - Trailing commas before } or ]
-      - Invalid backslash escapes (e.g. LaTeX like \\rho, \\mathbb)
+      - Invalid backslash escapes (e.g. LaTeX like \\alpha, \\mathbb). Sequences that are valid JSON
+        escapes (\\n, \\t, \\r, \\b, \\f, \\u) are kept as such, so LaTeX like \\rho or \\theta is ambiguous
+        and still becomes a control character — unavoidable without guessing intent.
       - Unquoted string values where the model dropped the opening quote
     """
     match = _JSON_OBJECT.search(strip_think_blocks(text))

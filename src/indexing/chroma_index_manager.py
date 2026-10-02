@@ -105,7 +105,7 @@ class ChromaIndexManager:
                 VectorStoreIndex.from_documents(
                     new_docs,
                     storage_context=StorageContext.from_defaults(vector_store=vector_store),
-                    show_progress=True,
+                    show_progress=len(new_docs) > 20,   # quiet for streamed fragments and small batches
                 )
                 newly_processed = [d.doc_id for d in new_docs]
                 log.info("Indexed %d new document(s).", len(new_docs))
