@@ -89,6 +89,7 @@ class AppConfig:
     judge_llm_settings: LlmSettings | None     # None = evaluation disabled
     enable_router: bool
     router_min_confidence: float
+    router_default_route: str
 
     # Embeddings
     embedder_settings: EmbedderSettings
@@ -219,6 +220,7 @@ class AppConfig:
             judge_llm_settings=_llm_role("JUDGE", llm_settings, optional=True),
             enable_router=as_bool(os.getenv("ENABLE_ROUTER"), default=False),
             router_min_confidence=as_float(os.getenv("ROUTER_MIN_CONFIDENCE"), default=0.5),
+            router_default_route=os.getenv("ROUTER_DEFAULT_ROUTE", "rag").strip() or "rag",
 
             # Embeddings
             embedder_settings=EmbedderSettings(

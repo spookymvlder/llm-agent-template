@@ -12,7 +12,7 @@ import chromadb
 from llama_index.core import QueryBundle, VectorStoreIndex
 from llama_index.core.base.base_query_engine import BaseQueryEngine
 from llama_index.core.postprocessor.types import BaseNodePostprocessor
-from llama_index.core.schema import MetadataMode, NodeWithScore
+from llama_index.core.schema import BaseNode, MetadataMode, NodeWithScore
 from llama_index.core.vector_stores import MetadataFilter, MetadataFilters
 
 from src.config_helpers import CollectionSettings
@@ -152,6 +152,18 @@ class CollectionHandle:
     async def search(self, query: str, top_k: int | None = None, filters: Mapping[str, Any] | None = None) -> list[RetrievedChunk]:
         """aretrieve() as plain RetrievedChunk objects."""
         return [RetrievedChunk.from_node(self.name, n) for n in await self.aretrieve(query, top_k, filters)]
+
+    def get_chunks(self, filters: Mapping[str, Any] | None = None, limit: int | None = None) -> list[BaseNode]:
+        """Every chunk matching exact-match `filters`, in document order (not similarity order) —
+        e.g. all of a session's transcript, for summarising. Postprocessors are not applied.
+
+        Raises:
+            ValueError: More than `limit` chunks match.
+        """
+        nodes = self.store.nodes_where(metadata_filters(filters))
+        if limit is not None and len(nodes) > limit:
+            raise ValueError(f"{len(nodes)} chunks match {dict(filters or {})} in '{self.name}' (limit {limit}); narrow the filters.")
+        return sorted(nodes, key=_document_order)
 
     # ------------------------------------------------------------------
     # Files
@@ -326,6 +338,15 @@ class CollectionHandle:
         self.files.reset_manifest()
         self.streams.clear_embedded()
         self.index = self.store.load_or_build().index
+
+
+def _document_order(node: BaseNode) -> tuple:
+    """Sort key: document id with numeric '#n' suffixes compared as numbers (stream fragments, PDF pages),
+    then position within the document."""
+    doc_id = node.ref_doc_id or node.node_id
+    base, _, suffix = doc_id.rpartition("#")
+    seq = (base, int(suffix)) if suffix.isdigit() and base else (doc_id, -1)
+    return (*seq, getattr(node, "start_char_idx", None) or 0)
 
 
 def open_collection(

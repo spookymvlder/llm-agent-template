@@ -5,11 +5,12 @@ from enum import StrEnum, auto
 
 from llama_index.core.agent.workflow import FunctionAgent
 
-from src.agent_setup import ConversationStore
+from src.agent_setup import ConversationStore, QueryRouter
 from src.evaluation import EvaluatorBundle
 from src.indexing import CollectionHandle
 
 DEFAULT_AGENT = "rag"
+DIRECT_AGENT = "direct"
 
 
 class Profile(StrEnum):
@@ -36,6 +37,7 @@ class AppContext:
     agents: dict[str, FunctionAgent] = field(default_factory=dict)
     evaluator_bundle: EvaluatorBundle | None = None
     conversations: ConversationStore | None = None
+    router: QueryRouter | None = None         # set when ENABLE_ROUTER=true
 
     @property
     def default_collection(self) -> CollectionHandle:

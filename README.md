@@ -81,6 +81,7 @@ EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 | `LLM_THINKING` | model default | Ollama reasoning models: `true`/`false` turns thinking on/off |
 | `ROUTER_*`, `JUDGE_*` | fall back to `LLM_*` | Same suffixes as `LLM_*` (`_PROVIDER`, `_MODEL`, `_TEMPERATURE`, `_THINKING`, ...). The judge (evaluation) is disabled unless `JUDGE_MODEL` is set |
 | `ENABLE_ROUTER` | `false` | Classify queries with the router LLM before running an agent |
+| `ROUTER_MIN_CONFIDENCE` / `ROUTER_DEFAULT_ROUTE` | `0.5` / `rag` | Below this confidence (or on unusable output) the default route is used |
 | `EMBEDDING_PROVIDER` | `huggingface` | `huggingface` or `ollama` |
 | `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model name |
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `512` / `50` | Splitter settings, in tokens |
@@ -141,6 +142,8 @@ src/
     agent_tools.py          # Generic tools (datetime, calculator, list documents)
     agent_runner.py         # stream_agent() / run_agent(): deltas, tool calls, answer + sources
     memory_factory.py       # build_memory(), ConversationStore (memory per conversation id)
+    router.py               # QueryRouter, RouteSpec, default routes
+    summarize.py            # summarize_documents(): tree-summarise chunks matching a filter
   indexing/
     chroma_index_manager.py # ChromaDB-backed VectorStoreIndex for one collection
     collections.py          # CollectionHandle: store + files + index + postprocessors
@@ -152,7 +155,9 @@ src/
   llm/
     llamaindex_setup.py     # Configures LlamaIndex Settings globals
     llm_factory.py          # Builds LLM instances from LlmSettings
+    parsing.py              # Tolerant JSON parsing of LLM output
   app_context.py            # AppContext (what bootstrap builds) and Profile
+  chat.py                   # respond() / answer(): route (if enabled) then run the handler
   config.py                 # AppConfig dataclass, loaded from .env
   config_helpers.py         # Coercion helpers, settings dataclasses
   evaluation.py             # EvaluatorBundle, evaluate_response()
@@ -192,6 +197,8 @@ templates/
 | `POST` | `/streams/{collection}/{stream_id}/close` | Close a stream (re-chunks it by default) |
 | `GET` | `/streams/{collection}` | List a collection's streams |
 | `POST` | `/ingest` | Sync collection folders now; `include_manual` applies pending manual changes |
+| `POST` | `/route` | Classify a message with the router without answering it (router enabled) |
+| `POST` | `/summarize` | Summarise every chunk matching `filters`, in order (e.g. `{"stream_id": "session-12"}`) |
 | `POST` | `/evaluate` | Evaluate a supplied answer against retrieved context (needs `JUDGE_MODEL`) |
 | `POST` | `/chat_and_evaluate` | Answer with a query engine, then evaluate it (needs `JUDGE_MODEL`) |
 | `GET` | `/docs` | Auto-generated Swagger UI |
@@ -294,6 +301,35 @@ ctx = bootstrap(Profile.SERVE, options=options)
 Changing a schema or steps doesn't re-embed existing documents; run `ingest -c <name> --reindex`.
 
 ---
+
+## Router (optional)
+
+With `ENABLE_ROUTER=true`, each message is first classified by the router LLM (`ROUTER_*` settings — a small, fast model with `ROUTER_THINKING=false` works well), then handled by the chosen route. The default routes are `rag` (agent with the search tools), `direct` (no tools: small talk, general knowledge) and `clarify` (asks the user to rephrase). Unparseable answers, unknown routes and confidence below `ROUTER_MIN_CONFIDENCE` fall back to `ROUTER_DEFAULT_ROUTE`. The decision is returned as `route` in chat responses and as the first SSE event; `POST /route` classifies without answering.
+
+A route is a name, a description the router reads, and an async-generator handler. Handlers can run any agent, reply with a fixed message, or do anything else:
+
+```python
+from src.agent_setup import AgentFinished, RouteSpec, agent_route, build_rag_agent, default_routes
+
+open_questions: list[str] = []
+
+async def note_question(rc):              # rc: RouteContext (ctx, message, memory, decision)
+    open_questions.append(rc.message)
+    yield AgentFinished(response="Added to the open questions list.")
+
+routes = [
+    agent_route("rules", "Questions about game rules.", agent_name="rules"),
+    agent_route("lore", "Questions about the world, characters or past sessions.", agent_name="lore"),
+    RouteSpec("offtopic", "Questions unrelated to the game.", note_question),
+]
+ctx = bootstrap(Profile.SERVE, routes=routes)       # with ROUTER_DEFAULT_ROUTE=rules
+ctx.agents["rules"] = build_rag_agent([ctx.collection("rules")])
+ctx.agents["lore"] = build_rag_agent([ctx.collection("transcripts"), ctx.collection("notes")])
+```
+
+## Summaries
+
+`summarize_documents(collection, filters)` (and `POST /summarize`) reads every chunk matching exact-match metadata filters in document order — not a similarity search — and tree-summarises them, so input isn't limited by the context window. For end-of-session notes: `{"collection": "transcripts", "filters": {"stream_id": "session-12"}}`.
 
 ## Adding Tools
 

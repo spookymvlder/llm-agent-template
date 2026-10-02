@@ -9,8 +9,17 @@ from typing import Mapping, Sequence
 import chromadb
 from llama_index.core import Settings
 
-from src.agent_setup import ConversationStore, build_generic_tools, build_memory, build_rag_agent
-from src.app_context import DEFAULT_AGENT, AppContext, Profile
+from src.agent_setup import (
+    ConversationStore,
+    QueryRouter,
+    RouteSpec,
+    build_direct_agent,
+    build_generic_tools,
+    build_memory,
+    build_rag_agent,
+    default_routes,
+)
+from src.app_context import DEFAULT_AGENT, DIRECT_AGENT, AppContext, Profile
 from src.config import CONFIG as cfg
 from src.config_helpers import LlmSettings
 from src.evaluation import build_evaluator
@@ -42,6 +51,8 @@ def _ollama_models_in_use(profile: Profile) -> set[str]:
         roles.append(cfg.llm_settings)
     if profile == Profile.SERVE:
         roles.append(cfg.judge_llm_settings)
+    if profile != Profile.INGEST and cfg.enable_router:
+        roles.append(cfg.router_llm_settings)
     models = {r.model for r in roles if r and r.provider == LLMProvider.OLLAMA}
     if cfg.embedder_settings.provider == EmbeddingProvider.OLLAMA:
         models.add(cfg.embedder_settings.model)
@@ -133,11 +144,12 @@ def bootstrap(
     reindex: bool = False,
     include_manual: bool = False,
     options: Mapping[str, CollectionOptions] | None = None,
+    routes: Sequence[RouteSpec] | None = None,
 ) -> AppContext:
     """Build everything the given profile needs and return it as an AppContext.
 
     Stages: logging → config validation → Ollama check → LlamaIndex settings → collections
-    (+ ingest) → agents → evaluator → conversation store. INGEST stops after collections.
+    (+ ingest) → agents → router (if enabled) → evaluator → conversation store. INGEST stops after collections.
 
     Files are synced when the profile is INGEST, or when AUTO_INGEST is enabled: new and changed files
     in STATIC folders are embedded; MANUAL folders only with include_manual.
@@ -150,6 +162,9 @@ def bootstrap(
         include_manual: Also embed new/changed files in MANUAL folders (see FileMode).
         options:        Per-collection schema, preprocessing steps and retrieval postprocessors, e.g.
                         {"rules": CollectionOptions(steps=[tag_edition], postprocessors=[EditionNote()])}.
+        routes:         Router routes (used when ENABLE_ROUTER=true). Default: rag / direct / clarify.
+                        Handlers can use any agent in ctx.agents — add your own there after bootstrap,
+                        or build them inside the handler.
 
     Raises:
         ConfigError:  Invalid configuration.
@@ -177,6 +192,17 @@ def bootstrap(
         verbose=cfg.log_level == "DEBUG",
     )
     log.info("Agent ready.")
+
+    if cfg.enable_router:
+        ctx.agents[DIRECT_AGENT] = build_direct_agent(verbose=cfg.log_level == "DEBUG")
+        ctx.router = QueryRouter(
+            llm=build_llm_from_settings(cfg.router_llm_settings),
+            routes=list(routes) if routes is not None else default_routes(),
+            default_route=cfg.router_default_route,
+            min_confidence=cfg.router_min_confidence,
+        )
+        log.info("Router ready: routes=%s default=%s model=%s",
+                 list(ctx.router.routes), cfg.router_default_route, cfg.router_llm_settings.model)
 
     if profile == Profile.SERVE and cfg.judge_llm_settings:
         ctx.evaluator_bundle = build_evaluator(build_llm_from_settings(cfg.judge_llm_settings))

@@ -23,10 +23,22 @@ class ChatRequest(BaseModel):
         default=None, description="Continue a conversation. Omit to start a new one; the response returns its id.",
     )
 
+class RouteInfo(BaseModel):
+    """The router's decision. `fallback` means the default route was used (unclear or unparseable answer)."""
+    route: str
+    confidence: float
+    reason: str
+    fallback: bool
+
 class ChatResponse(BaseModel):
     response: str
     conversation_id: str
     sources: list[Source]
+    route: RouteInfo | None = Field(default=None, description="Set when the router is enabled.")
+
+class RouteRequest(BaseModel):
+    message: NonEmptyStr
+    conversation_id: str | None = Field(default=None, description="Give the router this conversation's recent turns.")
 
 class ClearRequest(BaseModel):
     conversation_id: NonEmptyStr
@@ -78,6 +90,20 @@ class IngestResponse(BaseModel):
     results: list[IngestResult]
 
 
+class SummarizeRequest(BaseModel):
+    collection: str | None = Field(default=None, description="Defaults to the first collection in COLLECTIONS.")
+    filters: dict[str, MetadataValue] | None = Field(
+        default=None, description='Exact-match filters selecting what to summarise, e.g. {"stream_id": "session-12"}.',
+    )
+    instruction: str | None = Field(default=None, description="What the summary should focus on.")
+
+class SummarizeResponse(BaseModel):
+    collection: str
+    summary: str
+    chunks: int
+    doc_ids: list[str]
+
+
 # ---- Streams ---------------------------------------------------------------
 
 class StreamAppendRequest(BaseModel):
@@ -114,6 +140,7 @@ class CollectionStatus(BaseModel):
 class ReadyResponse(BaseModel):
     ready: bool
     collections: list[CollectionStatus]
+    routes: list[str] | None = Field(default=None, description="Router routes; None when the router is disabled.")
     evaluator_ready: bool
     conversations: int
 

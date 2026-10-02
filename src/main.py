@@ -12,7 +12,7 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
 
 from src.config import CONFIG as cfg
-from src.agent_setup import run_agent
+from src.chat import answer
 from src.app_context import Profile
 from src.startup import bootstrap
 
@@ -33,9 +33,11 @@ async def chat(question: str | None = None) -> None:
     _, memory = ctx.conversations.get("cli")
 
     async def ask(message: str) -> str:
-        result = await run_agent(ctx.agent, message, memory, cfg.max_iterations)
-        cited = sorted({s.metadata.get("source_path") or s.doc_id or "?" for s in result.sources})
-        return result.response + (f"\n  [sources: {', '.join(cited)}]" if cited else "")
+        decision, result = await answer(ctx, message, memory, cfg.max_iterations)
+        cited = sorted({s.metadata.get("source_path") or s.metadata.get("stream_id") or s.doc_id or "?"
+                        for s in result.sources})
+        route = f"[route: {decision.route}{' (fallback)' if decision.fallback else ''}] " if decision else ""
+        return route + result.response + (f"\n  [sources: {', '.join(cited)}]" if cited else "")
 
     if question:
         print(await ask(question))

@@ -28,6 +28,17 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 
+DIRECT_SYSTEM_PROMPT = (
+    "You are a helpful assistant. Answer directly and concisely from general knowledge and the "
+    "conversation so far. You have no access to documents."
+)
+
+
+def build_direct_agent(system_prompt: str = DIRECT_SYSTEM_PROMPT, verbose: bool = False) -> FunctionAgent:
+    """An agent with no tools: used by the router's `direct` route for small talk and general questions."""
+    return FunctionAgent(tools=[], llm=Settings.llm, system_prompt=system_prompt, verbose=verbose)
+
+
 def build_rag_agent(
     collections: Sequence[CollectionHandle],
     extra_tools: Sequence = (),

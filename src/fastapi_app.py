@@ -12,7 +12,9 @@ from fastapi.requests import Request
 from fastapi.templating import Jinja2Templates
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
-from src.agent_setup import AgentDelta, AgentFinished, AgentToolCall, run_agent, stream_agent
+from src.agent_setup import AgentDelta, AgentFinished, AgentToolCall, RouteDecision, summarize_documents
+from src.agent_setup.summarize import DEFAULT_INSTRUCTION
+from src.chat import answer, respond
 from src.app_context import AppContext, Profile
 from src.config import CONFIG as cfg
 from src.evaluation import evaluate_answer, evaluate_response
@@ -34,6 +36,10 @@ from src.models import (
     IngestResult,
     ReadyResponse,
     RetrieveRequest,
+    RouteInfo,
+    RouteRequest,
+    SummarizeRequest,
+    SummarizeResponse,
     RetrieveResponse,
     Source,
     StreamAppendRequest,
@@ -112,6 +118,7 @@ async def ready(ctx: Ctx):
                      for h in ctx.collections.values()],
         evaluator_ready=ctx.evaluator_bundle is not None,
         conversations=len(ctx.conversations) if ctx.conversations is not None else 0,
+        routes=list(ctx.router.routes) if ctx.router else None,
     )
 
 # ---------------------------------------------------------------------------
@@ -123,10 +130,15 @@ async def chat(body: ChatRequest, ctx: Ctx):
     """Non-streaming chat. Useful for programmatic clients and testing."""
     conversation_id, memory = ctx.conversations.get(body.conversation_id)
     try:
-        result = await run_agent(ctx.agent, body.message, memory, cfg.max_iterations)
+        decision, result = await answer(ctx, body.message, memory, cfg.max_iterations)
     except Exception as e:
         raise _internal_error("Chat", e)
-    return ChatResponse(response=result.response, conversation_id=conversation_id, sources=_sources(result.sources))
+    return ChatResponse(
+        response=result.response,
+        conversation_id=conversation_id,
+        sources=_sources(result.sources),
+        route=RouteInfo(**decision.model_dump()) if decision else None,
+    )
 
 
 @app.post("/chat/stream", response_class=EventSourceResponse)
@@ -134,6 +146,7 @@ async def chat_stream(body: ChatRequest, ctx: Ctx):
     """Streaming chat via SSE. Used by the browser UI.
 
     Events (data is JSON):
+        route      — {"route", "confidence", "reason", "fallback"} first, when the router is enabled
         delta      — a piece of answer text (string)
         tool_call  — {"tool": name, "args": {...}} when the agent calls a tool
         sources    — list of retrieved chunks the agent was given (see Source)
@@ -142,8 +155,10 @@ async def chat_stream(body: ChatRequest, ctx: Ctx):
     """
     conversation_id, memory = ctx.conversations.get(body.conversation_id)
     try:
-        async for event in stream_agent(ctx.agent, body.message, memory, cfg.max_iterations):
-            if isinstance(event, AgentDelta):
+        async for event in respond(ctx, body.message, memory, cfg.max_iterations):
+            if isinstance(event, RouteDecision):
+                yield ServerSentEvent(event="route", data=event.model_dump())
+            elif isinstance(event, AgentDelta):
                 yield ServerSentEvent(event="delta", data=event.text)
             elif isinstance(event, AgentToolCall):
                 yield ServerSentEvent(event="tool_call", data={"tool": event.tool, "args": event.args})
@@ -153,6 +168,22 @@ async def chat_stream(body: ChatRequest, ctx: Ctx):
     except Exception as e:
         log.exception("Chat stream error")
         yield ServerSentEvent(event="error", data=_error_detail("Chat", e))
+
+
+@app.post("/route", response_model=RouteInfo)
+async def route(body: RouteRequest, ctx: Ctx):
+    """Classify a message without answering it (e.g. to sort questions pulled from a transcript)."""
+    if ctx.router is None:
+        raise HTTPException(status_code=503, detail="Router is not enabled. Set ENABLE_ROUTER=true.")
+    history = []
+    if body.conversation_id:
+        _, memory = ctx.conversations.get(body.conversation_id)
+        history = await memory.aget_all()
+    try:
+        decision = await ctx.router.classify(body.message, history)
+    except Exception as e:
+        raise _internal_error("Routing", e)
+    return RouteInfo(**decision.model_dump())
 
 
 @app.post("/clear")
@@ -206,6 +237,18 @@ async def ingest(body: IngestRequest, ctx: Ctx):
     except Exception as e:
         raise _internal_error("Ingest", e)
     return IngestResponse(results=results)
+
+@app.post("/summarize", response_model=SummarizeResponse)
+async def summarize(body: SummarizeRequest, ctx: Ctx):
+    """Summarise every chunk matching `filters`, in document order (e.g. a closed session's transcript)."""
+    handle = _collection(ctx, body.collection)
+    try:
+        result = await summarize_documents(handle, body.filters, body.instruction or DEFAULT_INSTRUCTION)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise _internal_error("Summarize", e)
+    return SummarizeResponse(collection=handle.name, summary=result.text, chunks=result.chunks, doc_ids=result.doc_ids)
 
 # ---------------------------------------------------------------------------
 # Routes — streams

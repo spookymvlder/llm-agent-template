@@ -513,7 +513,10 @@
             let agentMsg = null;
             let sources = [];
             await readSSE(res, (event, data) => {
-                if (event === "delta") {
+                if (event === "route") {
+                    appendNode(textEl("div", "tool-note", "route: " + data.route +
+                        (data.fallback ? " (fallback)" : " (" + data.confidence.toFixed(2) + ")") + " — " + data.reason));
+                } else if (event === "delta") {
                     agentMsg ??= appendPartialMessage();
                     agentMsg.textContent += data;
                 } else if (event === "tool_call") {

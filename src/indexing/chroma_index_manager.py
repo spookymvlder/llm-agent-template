@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from llama_index.core import VectorStoreIndex, Document
+from llama_index.core.schema import BaseNode
 from llama_index.core.storage import StorageContext
+from llama_index.core.vector_stores import MetadataFilters
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
 from src.preprocessing import safe_meta
@@ -114,6 +116,10 @@ class ChromaIndexManager:
             index=VectorStoreIndex.from_vector_store(vector_store),
             newly_processed=newly_processed,
         )
+
+    def nodes_where(self, filters: MetadataFilters | None) -> list[BaseNode]:
+        """Every stored chunk matching `filters` (all chunks if None), as LlamaIndex nodes. No similarity search."""
+        return ChromaVectorStore(chroma_collection=self._collection()).get_nodes(node_ids=None, filters=filters)
 
     def count_where(self, key: str, value: Any) -> int:
         """Number of chunks whose metadata `key` equals `value`."""
