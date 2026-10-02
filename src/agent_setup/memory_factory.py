@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+import time
+import uuid
+from collections import OrderedDict
+from typing import Any, Callable
 
 import chromadb
 from llama_index.core.memory import (
@@ -94,3 +97,59 @@ def build_memory(
         [b.name for b in blocks],
     )
     return memory
+
+
+class ConversationStore:
+    """One Memory per conversation id, so concurrent API clients don't share chat history.
+
+    Memories live in-process: they are lost on restart, and with multiple server workers each worker
+    has its own store. Idle conversations expire after ttl_s; beyond max_conversations the least
+    recently used is dropped.
+
+    Args:
+        factory:           Builds a Memory for a new conversation id (e.g. a partial of build_memory).
+        max_conversations: Cap on stored conversations.
+        ttl_s:             Seconds of inactivity before a conversation is forgotten. 0 = never.
+    """
+
+    def __init__(self, factory: Callable[[str], Memory], max_conversations: int = 100, ttl_s: float = 3600) -> None:
+        self._factory = factory
+        self._max = max_conversations
+        self._ttl = ttl_s
+        self._items: OrderedDict[str, tuple[Memory, float]] = OrderedDict()
+
+    def get(self, conversation_id: str | None = None) -> tuple[str, Memory]:
+        """Return (id, memory), creating the conversation if the id is new or None (a random id is assigned)."""
+        self._evict()
+        conversation_id = conversation_id or uuid.uuid4().hex
+        if conversation_id in self._items:
+            memory, _ = self._items.pop(conversation_id)
+        else:
+            memory = self._factory(conversation_id)
+        self._items[conversation_id] = (memory, time.monotonic())
+        while len(self._items) > self._max:
+            dropped, _ = self._items.popitem(last=False)
+            log.info("Conversation store full; dropped least recently used conversation %s.", dropped)
+        return conversation_id, memory
+
+    async def reset(self, conversation_id: str) -> bool:
+        """Clear a conversation's history. Returns False if the id is unknown (or expired)."""
+        self._evict()
+        item = self._items.pop(conversation_id, None)
+        if item is None:
+            return False
+        await item[0].areset()
+        return True
+
+    def __len__(self) -> int:
+        self._evict()
+        return len(self._items)
+
+    def _evict(self) -> None:
+        if not self._ttl:
+            return
+        cutoff = time.monotonic() - self._ttl
+        expired = [cid for cid, (_, last_used) in self._items.items() if last_used < cutoff]
+        for cid in expired:
+            del self._items[cid]
+

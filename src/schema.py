@@ -1,17 +1,43 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum, auto
 
 # Column holding each document's stable id (always set by ingestion; not stored as chunk metadata).
 DOC_ID = "doc_id"
 # Chunk metadata set by file ingestion: path relative to the collection folder, and the file's SHA-256.
 SOURCE_PATH = "source_path"
 FILE_HASH = "file_hash"
+# Set to "api" on documents added at runtime (POST /documents), which have no source file to re-ingest.
+ORIGIN = "ingested_via"
+ORIGIN_API = "api"
+ORIGIN_STREAM = "stream"
+# Set on every chunk that came from a stream (POST /streams/...).
+STREAM_ID = "stream_id"
+
+# _metadata.json keys starting with this prefix configure ingestion and are not stored as metadata.
+RESERVED_PREFIX = "_"
+MODE_KEY = "_mode"
+
+
+class FileMode(StrEnum):
+    """How a file in a collection folder is kept in sync with the vector store.
+
+    STATIC:  new and changed files are embedded on every ingest, including startup auto-ingest.
+    MANUAL:  new and changed files are only reported as pending until an explicit ingest with
+             include_manual (`ingest --manual`, POST /ingest {"include_manual": true}) — for files
+             edited by hand that shouldn't be picked up half-finished.
+    Streams (POST /streams/...) are tracked separately and are never scanned as files.
+
+    Set per folder with {"_mode": "manual"} in _metadata.json; the default is DEFAULT_CHANGE_MODE.
+    """
+    STATIC = auto()
+    MANUAL = auto()
 
 # Metadata the LLM never needs to see. Everything else (file_name, page_label, source_path,
 # _metadata.json values, table columns) is shown to the LLM alongside each chunk.
 BOOKKEEPING_KEYS: tuple[str, ...] = (
-    FILE_HASH, "file_path", "file_size", "file_type",
+    FILE_HASH, ORIGIN, "file_path", "file_size", "file_type",
     "creation_date", "last_modified_date", "last_accessed_date",
 )
 
@@ -51,5 +77,5 @@ class DocumentSchema:
         if self.metadata_columns is None:
             return [c for c in columns if c not in skip]
         # Ingestion bookkeeping is always kept so changed files can be replaced.
-        keep = [*self.metadata_columns, SOURCE_PATH, FILE_HASH]
+        keep = [*self.metadata_columns, SOURCE_PATH, FILE_HASH, ORIGIN]
         return [c for c in dict.fromkeys(keep) if c in columns and c not in skip]

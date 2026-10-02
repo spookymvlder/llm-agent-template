@@ -11,7 +11,7 @@ from typing import Any
 
 from llama_index.core import SimpleDirectoryReader
 
-from src.schema import DOC_ID, FILE_HASH, SOURCE_PATH, DocumentSchema
+from src.schema import DOC_ID, FILE_HASH, MODE_KEY, RESERVED_PREFIX, SOURCE_PATH, DocumentSchema, FileMode
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ class FileRecord:
     mtime_ns: int
     meta_sha256: str        # hash of the merged _metadata.json values that apply to this file
     folder_metadata: dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
+    mode: FileMode = FileMode.STATIC
 
     def to_manifest(self) -> dict:
         return {"sha256": self.sha256, "size": self.size, "mtime_ns": self.mtime_ns, "meta_sha256": self.meta_sha256}
@@ -46,6 +47,7 @@ class FileChanges:
     changed: list[FileRecord] = field(default_factory=list)    # content or folder metadata changed
     touched: list[FileRecord] = field(default_factory=list)    # size/mtime differ but nothing that matters
     missing: list[str] = field(default_factory=list)           # in the manifest, no longer on disk
+    pending: list[FileRecord] = field(default_factory=list)    # new/changed MANUAL files not being applied
 
     @property
     def has_work(self) -> bool:
@@ -61,8 +63,10 @@ class IndexManager:
     each file's relative path to its SHA-256, size, mtime and folder-metadata hash;
     files whose size and mtime are unchanged are not re-hashed.
 
-    Folder metadata: a `_metadata.json` object in any folder applies to every file in that folder and
-    below, with nearer folders overriding. Editing one marks the files it covers as changed.
+    Folder metadata: a `_metadata.json` object in any folder applies to every file in that folder and                                                                                                                
+    below, with nearer folders overriding. Editing one marks the files it covers as changed. Keys starting
+    with "_" configure ingestion instead — `"_mode": "manual"` makes changes wait for an explicit ingest
+    (see FileMode).
 
         data/raw/rules/
           2014/_metadata.json   -> {"edition": "2014"}
@@ -92,26 +96,39 @@ class IndexManager:
     (tabular schemas: .csv, .jsonl, .parquet as one document per row; .parquet needs pyarrow).
     """
 
-    def __init__(self, *, raw_dir: Path, manifest_path: Path, schema: DocumentSchema | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        raw_dir: Path,
+        manifest_path: Path,
+        schema: DocumentSchema | None = None,
+        default_mode: FileMode = FileMode.STATIC,
+    ) -> None:
         """
         Args:
             raw_dir:       Shared directory containing source documents. Never modified.
             manifest_path: Environment-specific JSON file recording which file versions have been ingested.
             schema:        The collection's DocumentSchema (decides whether tables are read per row).
+            default_mode:  FileMode for folders whose _metadata.json doesn't set "_mode".
         """
         self.raw_dir = raw_dir
         self.manifest_path = manifest_path
         self.schema = schema or DocumentSchema()
+        self.default_mode = default_mode
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def find_changes(self) -> FileChanges:
+    def find_changes(self, include_manual: bool = False) -> FileChanges:
         """Compare raw_dir against the manifest.
 
+        Args:
+            include_manual: Treat new/changed MANUAL files like STATIC ones. Otherwise they are
+                            returned in `pending` and left out of `new` / `changed`.
+
         Raises:
-            ValueError: A _metadata.json file is not a valid JSON object.
+            ValueError: A _metadata.json file is not a valid JSON object or has an invalid "_mode".
         """
         self._ensure_dirs()
         manifest = self._load_manifest()
@@ -122,7 +139,10 @@ class IndexManager:
         for path in self._discover_files():
             rel = self._relative_path(path)
             on_disk.add(rel)
-            folder_metadata = self._folder_metadata(path.parent, folder_cache)
+            merged = self._folder_metadata(path.parent, folder_cache)
+            mode = self._mode(merged, path.parent)
+            # Reserved keys (e.g. "_mode") configure ingestion: not document metadata, not part of the fingerprint.
+            folder_metadata = {k: v for k, v in merged.items() if not k.startswith(RESERVED_PREFIX)}
             meta_sha = _sha256_text(json.dumps(folder_metadata, sort_keys=True, default=str))
             stat = path.stat()
             known = manifest.get(rel)
@@ -131,19 +151,24 @@ class IndexManager:
             if same_file and known.get("meta_sha256") == meta_sha:
                 continue  # unchanged: skip hashing
             sha = known["sha256"] if same_file else _sha256_file(path)
-            record = FileRecord(path, rel, sha, stat.st_size, stat.st_mtime_ns, meta_sha, folder_metadata)
+            record = FileRecord(path, rel, sha, stat.st_size, stat.st_mtime_ns, meta_sha, folder_metadata, mode)
 
-            if known is None:
+            is_new = known is None
+            is_changed = not is_new and (known.get("sha256") != sha or known.get("meta_sha256") != meta_sha)
+            if (is_new or is_changed) and mode == FileMode.MANUAL and not include_manual:
+                changes.pending.append(record)
+            elif is_new:
                 changes.new.append(record)
-            elif known.get("sha256") != sha or known.get("meta_sha256") != meta_sha:
+            elif is_changed:
                 changes.changed.append(record)
             else:
                 changes.touched.append(record)
 
         changes.missing = sorted(set(manifest) - on_disk)
         log.info(
-            "[%s] %d new, %d changed, %d missing file(s) in %s.",
-            self._label, len(changes.new), len(changes.changed), len(changes.missing), self.raw_dir,
+            "[%s] %d new, %d changed, %d pending (manual), %d missing file(s) in %s.",
+            self._label, len(changes.new), len(changes.changed), len(changes.pending), len(changes.missing),
+            self.raw_dir,
         )
         return changes
 
@@ -298,6 +323,16 @@ class IndexManager:
             merged.update(own)
         cache[folder] = merged
         return merged
+
+    def _mode(self, merged_metadata: dict[str, Any], folder: Path) -> FileMode:
+        value = merged_metadata.get(MODE_KEY)
+        if value is None:
+            return self.default_mode
+        try:
+            return FileMode(str(value).lower())
+        except ValueError:
+            valid = ", ".join(m.value for m in FileMode)
+            raise ValueError(f'Invalid "{MODE_KEY}": "{value}" in a _metadata.json at or above {folder}. Valid: {valid}') from None
 
     def _load_manifest(self) -> dict[str, dict]:
         if not self.manifest_path.exists():

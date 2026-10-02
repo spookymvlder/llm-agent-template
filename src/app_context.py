@@ -5,7 +5,7 @@ from enum import StrEnum, auto
 
 from llama_index.core.agent.workflow import FunctionAgent
 
-from src.agent_setup import Memory
+from src.agent_setup import ConversationStore
 from src.evaluation import EvaluatorBundle
 from src.indexing import CollectionHandle
 
@@ -16,7 +16,7 @@ class Profile(StrEnum):
     """What bootstrap() builds.
 
     INGEST: collections only (no LLM needed).
-    CHAT:   collections + agents + memory (CLI; no evaluator).
+    CHAT:   collections + agents + conversation memory (CLI; no evaluator).
     SERVE:  CHAT + evaluator if a judge is configured (FastAPI).
     """
     INGEST = auto()
@@ -35,7 +35,7 @@ class AppContext:
     collections: dict[str, CollectionHandle]
     agents: dict[str, FunctionAgent] = field(default_factory=dict)
     evaluator_bundle: EvaluatorBundle | None = None
-    memory: Memory | None = None
+    conversations: ConversationStore | None = None
 
     @property
     def default_collection(self) -> CollectionHandle:

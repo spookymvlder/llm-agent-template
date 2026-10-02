@@ -5,7 +5,8 @@ Responsibilities:
   - Validate that the schema's text columns are present
   - Normalise whitespace in text and drop rows with no text
   - Coerce metadata columns to ChromaDB-safe scalar types
-    (str, int, float, bool — no None, list, dict, enum, or NaN)
+    (str, int, float, bool — no list, dict, enum, or NaN). Missing values (None/NaN/empty list)
+    become None and are left out of that document's metadata.
   - Drop duplicate document ids
   - Log a summary of any changes made
 """
@@ -94,23 +95,24 @@ def normalize_text(value: Any) -> str:
     return text.strip()
 
 
-def safe_meta(value: Any) -> str | int | float | bool:
+def safe_meta(value: Any) -> str | int | float | bool | None:
     """
-    Coerce *value* to a type that ChromaDB accepts as metadata.
+    Coerce *value* to a type that ChromaDB accepts as metadata, or None if it is missing.
 
     ChromaDB only accepts str, int, float, or bool as metadata values.
     Handles the richer input types (enums, lists, dicts, pandas NA, numpy scalars)
-    that come out of tables and preprocessing steps.
+    that come out of tables and preprocessing steps. None means "omit this key": rows in one batch
+    often have different keys (e.g. runtime documents), and storing "" would make them match filters.
     """
     # --- None / NaN ---------------------------------------------------------
     if value is None:
-        return ""
+        return None
     # Empty collections before pd.isna (which raises on non-scalars)
     if isinstance(value, (list, tuple, set)) and len(value) == 0:
-        return ""
+        return None
     try:
         if pd.isna(value):
-            return ""
+            return None
     except (ValueError, TypeError):
         pass  # pd.isna doesn't work on lists/arrays — continue
 

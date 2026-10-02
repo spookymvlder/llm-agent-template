@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import logging
-import re
 from typing import Sequence
 
 from pydantic import BaseModel
 
 from llama_index.core import Settings
 from llama_index.core.agent.workflow import FunctionAgent
-from llama_index.core.tools import QueryEngineTool, ToolMetadata
 
+from src.agent_setup.agent_tools import build_search_tool
 from src.indexing import CollectionHandle
 
 log = logging.getLogger(__name__)
@@ -22,28 +21,11 @@ DEFAULT_SYSTEM_PROMPT = (
     "respond DIRECTLY without using any tools.\n"
     "- Use a search_* tool when the question may be answered by the documents; pick the "
     "collection whose description matches the question.\n"
+    "- Search results show each passage's metadata (source file, page, tags). Base your answer on "
+    "the passages and say which sources you used.\n"
     "- Always provide a final answer. Do not loop or repeat tool calls.\n"
     "- When you have enough information to answer, stop and respond immediately."
 )
-
-
-def search_tool_name(collection_name: str) -> str:
-    """Tool name for a collection's search tool, e.g. 'rules' -> 'search_rules'."""
-    return "search_" + re.sub(r"[^a-zA-Z0-9_]", "_", collection_name)
-
-
-def build_search_tool(collection: CollectionHandle) -> QueryEngineTool:
-    """A tool that searches one collection and returns a synthesized answer."""
-    return QueryEngineTool(
-        query_engine=collection.as_query_engine(),
-        metadata=ToolMetadata(
-            name=search_tool_name(collection.name),
-            description=(
-                f"Searches the '{collection.name}' collection and returns an answer drawn from it. "
-                f"Contents: {collection.description}"
-            ),
-        ),
-    )
 
 
 def build_rag_agent(
@@ -51,7 +33,7 @@ def build_rag_agent(
     extra_tools: Sequence = (),
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     output_cls: type[BaseModel] | None = None,
-    verbose: bool = True,
+    verbose: bool = False,
 ) -> FunctionAgent:
     """Create a FunctionAgent with one search tool per collection plus any extra tools.
 
@@ -70,7 +52,7 @@ def build_rag_agent(
         output_cls:    Optional Pydantic model for structured responses. When provided,
                        the agent will return a validated instance of this class instead
                        of plain text. Defaults to None (unstructured).
-        verbose:       Log tool calls and intermediate reasoning steps.
+        verbose:       Print each workflow step to stdout (startup enables this when LOG_LEVEL=DEBUG).
 
     Returns:
         FunctionAgent ready for async use via agent.run(user_msg='...').

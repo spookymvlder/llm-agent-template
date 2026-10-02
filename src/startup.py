@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 import urllib.error
 import urllib.request
 from typing import Mapping, Sequence
@@ -10,12 +9,12 @@ from typing import Mapping, Sequence
 import chromadb
 from llama_index.core import Settings
 
-from src.agent_setup import build_generic_tools, build_memory, build_rag_agent
+from src.agent_setup import ConversationStore, build_generic_tools, build_memory, build_rag_agent
 from src.app_context import DEFAULT_AGENT, AppContext, Profile
 from src.config import CONFIG as cfg
 from src.config_helpers import LlmSettings
 from src.evaluation import build_evaluator
-from src.indexing import CollectionHandle, CollectionOptions, open_collection
+from src.indexing import CollectionHandle, CollectionOptions, SyncResult, open_collection
 from src.llm import build_llm_from_settings, configure_llamaindex
 from src.logging_setup import setup_logging
 from src.providers import EmbeddingProvider, LLMProvider
@@ -87,25 +86,31 @@ def _open_collections(
             client=client,
             chroma_dir=cfg.chroma_dir,
             manifest_dir=cfg.env_dir / "manifests",
+            stream_dir=cfg.streams_dir / c.name,
             distance_metric=cfg.distance_metric,
+            default_mode=cfg.default_change_mode,
             options=options.get(c.name),
         )
         for c in selected
     }
 
 
-def _ingest(collections: Mapping[str, CollectionHandle], reindex: bool) -> None:
+def _ingest(collections: Mapping[str, CollectionHandle], reindex: bool, include_manual: bool) -> None:
     for handle in collections.values():
         if reindex:
             log.info("Reindexing '%s'...", handle.name)
             handle.reset()
-        result = handle.sync_files(reindex_changed=cfg.reindex_changed_files)
-        if result.new_files or result.changed_files:
-            log.info(
-                "Collection '%s': embedded %d new and %d changed file(s) (%d document(s) added, %d old chunk(s) removed).",
-                handle.name, len(result.new_files), len(result.changed_files),
-                result.documents_added, result.chunks_removed,
-            )
+        log_sync(handle.name, handle.sync(include_manual=include_manual or reindex))
+
+
+def log_sync(collection: str, result: SyncResult) -> None:
+    if result.new_files or result.changed_files or result.streams_embedded:
+        log.info(
+            "Collection '%s': embedded %d new and %d changed file(s), %d stream(s) "
+            "(%d document(s) added, %d old chunk(s) removed).",
+            collection, len(result.new_files), len(result.changed_files), len(result.streams_embedded),
+            result.documents_added, result.chunks_removed,
+        )
 
 
 def _warn_empty(collections: Mapping[str, CollectionHandle]) -> None:
@@ -126,20 +131,23 @@ def bootstrap(
     *,
     collections: Sequence[str] | None = None,
     reindex: bool = False,
+    include_manual: bool = False,
     options: Mapping[str, CollectionOptions] | None = None,
 ) -> AppContext:
     """Build everything the given profile needs and return it as an AppContext.
 
     Stages: logging → config validation → Ollama check → LlamaIndex settings → collections
-    (+ ingest) → agents → evaluator → memory. INGEST stops after collections.
+    (+ ingest) → agents → evaluator → conversation store. INGEST stops after collections.
 
-    New files are ingested when the profile is INGEST, or when AUTO_INGEST is enabled; changed files
-    too if REINDEX_CHANGED_FILES is enabled.
+    Files are synced when the profile is INGEST, or when AUTO_INGEST is enabled: new and changed files
+    in STATIC folders are embedded; MANUAL folders only with include_manual.
 
     Args:
         profile:        What to build; see Profile.
         collections:    Names of collections to open. Default: all of COLLECTIONS.
-        reindex:        Delete and re-embed the opened collections before ingesting (implies ingest).
+        reindex:        Delete and re-embed the opened collections before ingesting (implies ingest and
+                        include_manual: a rebuild includes every file).
+        include_manual: Also embed new/changed files in MANUAL folders (see FileMode).
         options:        Per-collection schema, preprocessing steps and retrieval postprocessors, e.g.
                         {"rules": CollectionOptions(steps=[tag_edition], postprocessors=[EditionNote()])}.
 
@@ -156,7 +164,7 @@ def bootstrap(
 
     handles = _open_collections(collections, options or {})
     if profile == Profile.INGEST or cfg.auto_ingest or reindex:
-        _ingest(handles, reindex)
+        _ingest(handles, reindex, include_manual)
     _warn_empty(handles)
 
     ctx = AppContext(profile=profile, collections=handles)
@@ -166,6 +174,7 @@ def bootstrap(
     ctx.agents[DEFAULT_AGENT] = build_rag_agent(
         collections=list(handles.values()),
         extra_tools=build_generic_tools(handles),
+        verbose=cfg.log_level == "DEBUG",
     )
     log.info("Agent ready.")
 
@@ -173,11 +182,15 @@ def bootstrap(
         ctx.evaluator_bundle = build_evaluator(build_llm_from_settings(cfg.judge_llm_settings))
         log.info("Evaluator ready.")
 
-    ctx.memory = build_memory(
-        session_id=str(uuid.uuid4()),
-        llm=Settings.llm,
-        token_limit=cfg.memory_token_limit,
-        enable_fact_extraction=cfg.enable_fact_extraction,
-        max_facts=cfg.max_facts,
+    ctx.conversations = ConversationStore(
+        factory=lambda conversation_id: build_memory(
+            session_id=conversation_id,
+            llm=Settings.llm,
+            token_limit=cfg.memory_token_limit,
+            enable_fact_extraction=cfg.enable_fact_extraction,
+            max_facts=cfg.max_facts,
+        ),
+        max_conversations=cfg.max_conversations,
+        ttl_s=cfg.conversation_ttl_s,
     )
     return ctx

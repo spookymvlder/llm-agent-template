@@ -12,6 +12,7 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
 
 from src.config import CONFIG as cfg
+from src.agent_setup import run_agent
 from src.app_context import Profile
 from src.startup import bootstrap
 
@@ -29,9 +30,12 @@ async def chat(question: str | None = None) -> None:
     Requires main to be run with command line argument 'chat'.
     """
     ctx = bootstrap(Profile.CHAT)
+    _, memory = ctx.conversations.get("cli")
 
     async def ask(message: str) -> str:
-        return str(await ctx.agent.run(user_msg=message, max_iterations=cfg.max_iterations, memory=ctx.memory))
+        result = await run_agent(ctx.agent, message, memory, cfg.max_iterations)
+        cited = sorted({s.metadata.get("source_path") or s.doc_id or "?" for s in result.sources})
+        return result.response + (f"\n  [sources: {', '.join(cited)}]" if cited else "")
 
     if question:
         print(await ask(question))
@@ -46,9 +50,9 @@ async def chat(question: str | None = None) -> None:
             print(f"Agent: {await ask(user_input)}\n")
 
 
-def ingest(collections: list[str] | None, reindex: bool) -> None:
+def ingest(collections: list[str] | None, reindex: bool, include_manual: bool) -> None:
     """Ingest new files into the vector store (all collections unless some are named) and exit."""
-    ctx = bootstrap(Profile.INGEST, collections=collections, reindex=reindex)
+    ctx = bootstrap(Profile.INGEST, collections=collections, reindex=reindex, include_manual=include_manual)
     for handle in ctx.collections.values():
         print(f"{handle.name}: {handle.count()} chunk(s) indexed from {handle.settings.raw_dir}")
 
@@ -81,8 +85,12 @@ def main() -> None:
     )
     ingest_p.add_argument(
         "--reindex", action="store_true",
-        help="Delete the collection(s) and re-embed every file. Needed after changing the embedding "
-             "model, chunk settings or distance metric.",
+        help="Delete the collection(s) and re-embed every file and stream. Needed after changing the "
+             "embedding model, chunk settings or distance metric.",
+    )
+    ingest_p.add_argument(
+        "--manual", action="store_true", dest="include_manual",
+        help="Also embed new/changed files in folders marked {\"_mode\": \"manual\"}.",
     )
     args = parser.parse_args()
 
@@ -96,7 +104,7 @@ def main() -> None:
     elif args.command == "chat":
         asyncio.run(chat(args.question))
     elif args.command == "ingest":
-        ingest(args.collections, args.reindex)
+        ingest(args.collections, args.reindex, args.include_manual)
 
 if __name__ == "__main__":
     main()

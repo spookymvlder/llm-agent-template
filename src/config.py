@@ -24,6 +24,7 @@ from src.config_helpers import (
     parse_enum,
 )
 from src.providers import API_KEY_ENV_VARS, EmbeddingProvider, LLMProvider
+from src.schema import FileMode
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ _RENAMED_ENV_VARS = {
     "TEMPERATURE": "LLM_TEMPERATURE",
     "CONTEXT_WINDOW": "LLM_CONTEXT_WINDOW",
     "COLLECTION_NAME": "COLLECTIONS",
+    "REINDEX_CHANGED_FILES": "DEFAULT_CHANGE_MODE",
 }
 
 _DISTANCE_METRICS = {"cosine", "l2", "ip"}
@@ -63,13 +65,14 @@ class AppConfig:
     seed: int
     environment: AppConfig.Environment
     auto_ingest: bool
-    reindex_changed_files: bool   # re-embed files whose content hash changed since they were ingested
+    default_change_mode: FileMode   # static: changed files re-embed on any ingest; manual: wait for `ingest --manual`
 
     # Paths. Directories are created by the components that use them, not at import.
     project_root: Path
     data_dir: Path
     raw_dir: Path          # shared across environments; one subdirectory per collection
     env_dir: Path          # data/{environment}
+    streams_dir: Path      # data/{environment}/streams/<collection>/ — stream files are per environment
     processed_dir: Path
     logs_dir: Path
     chroma_dir: Path
@@ -101,6 +104,8 @@ class AppConfig:
     memory_token_limit: int
     enable_fact_extraction: bool
     max_facts: int
+    max_conversations: int       # chat memories kept in-process (least recently used dropped)
+    conversation_ttl_s: float    # idle seconds before a conversation's memory is dropped; 0 = never
 
     # Evaluation
     eval_concurrency: int
@@ -190,7 +195,7 @@ class AppConfig:
             seed=as_int(os.getenv("SEED"), default=42),
             environment=env_mode,
             auto_ingest=as_bool(os.getenv("AUTO_INGEST"), default=True),
-            reindex_changed_files=as_bool(os.getenv("REINDEX_CHANGED_FILES"), default=True),
+            default_change_mode=parse_enum(os.getenv("DEFAULT_CHANGE_MODE"), FileMode, FileMode.STATIC.value),
 
             # Paths
             project_root=project_root,
@@ -201,6 +206,7 @@ class AppConfig:
             logs_dir=env_dir / "logs",
             chroma_dir=env_dir / "chroma",
             eval_dir=env_dir / "evaluation",
+            streams_dir=env_dir / "streams",
 
             # Logging
             enable_logging=as_bool(os.getenv("ENABLE_LOGGING"), default=True),
@@ -236,6 +242,8 @@ class AppConfig:
             memory_token_limit=as_int(os.getenv("MEMORY_TOKEN_LIMIT"), default=4096, min=256),
             enable_fact_extraction=as_bool(os.getenv("ENABLE_FACT_EXTRACTION"), default=True),
             max_facts=as_int(os.getenv("MAX_FACTS"), default=50, min=1),
+            max_conversations=as_int(os.getenv("MAX_CONVERSATIONS"), default=100, min=1),
+            conversation_ttl_s=as_float(os.getenv("CONVERSATION_TTL_S"), default=3600.0),
 
             # Evaluation
             eval_concurrency=as_int(os.getenv("EVAL_CONCURRENCY"), default=1, min=1),

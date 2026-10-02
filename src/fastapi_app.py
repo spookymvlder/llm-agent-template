@@ -1,63 +1,72 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import asdict
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.templating import Jinja2Templates
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
-from llama_index.core import QueryBundle
-from llama_index.core.agent.workflow import AgentStream
-
-from src.evaluation import EvaluatorBundle, evaluate_answer, evaluate_response
+from src.agent_setup import AgentDelta, AgentFinished, AgentToolCall, run_agent, stream_agent
+from src.app_context import AppContext, Profile
+from src.config import CONFIG as cfg
+from src.evaluation import evaluate_answer, evaluate_response
+from src.indexing import CollectionHandle, RetrievedChunk, StreamClosed, StreamError, StreamInfo, StreamNotFound
 from src.models import (
+    AddDocumentsRequest,
+    AddDocumentsResponse,
+    ChatEvalRequest,
     ChatEvalResponse,
     ChatRequest,
     ChatResponse,
+    ClearRequest,
+    CollectionStatus,
     EvaluateRequest,
     EvaluateResponse,
     HealthResponse,
+    IngestRequest,
+    IngestResponse,
+    IngestResult,
+    ReadyResponse,
+    RetrieveRequest,
+    RetrieveResponse,
+    Source,
+    StreamAppendRequest,
+    StreamAppendResponse,
+    StreamCloseRequest,
+    StreamStatus,
 )
-from src.app_context import Profile
-from src.config import CONFIG as cfg
 from src.startup import bootstrap
 
 
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Application state
-# ---------------------------------------------------------------------------
-
-# TODO Phase 4: read these from app.state.ctx via a dependency instead of module globals.
-agent = None
-query_engine = None             # default collection; used by the evaluation routes
-evaluator_bundle: EvaluatorBundle | None = None
-memory = None                   # built after bootstrap
-max_iterations: int = cfg.max_iterations
-
-# ---------------------------------------------------------------------------
-# Lifespan
+# Lifespan & dependencies
 # ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, query_engine, evaluator_bundle, memory
-    ctx = bootstrap(Profile.SERVE)
-    app.state.ctx = ctx
-    agent = ctx.agent
-    query_engine = ctx.default_collection.as_query_engine()
-    evaluator_bundle = ctx.evaluator_bundle
-    memory = ctx.memory
+    app.state.ctx = bootstrap(Profile.SERVE)
     log.info(
-        "Startup complete. evaluator=%s",
-        "enabled" if evaluator_bundle else "disabled",
+        "Startup complete. collections=%s evaluator=%s",
+        list(app.state.ctx.collections), "enabled" if app.state.ctx.evaluator_bundle else "disabled",
     )
     yield
     log.info("Shutting down.")
+
+
+def get_ctx(request: Request) -> AppContext:
+    """The AppContext built at startup. Tests can override this dependency with a stub context."""
+    return request.app.state.ctx
+
+
+Ctx = Annotated[AppContext, Depends(get_ctx)]
 
 # ---------------------------------------------------------------------------
 # App
@@ -80,7 +89,7 @@ app.add_middleware(
 templates = Jinja2Templates(directory="templates")
 
 # ---------------------------------------------------------------------------
-# Routes
+# Routes — status
 # ---------------------------------------------------------------------------
 
 @app.get("/")
@@ -90,111 +99,234 @@ async def index(request: Request):
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Cheap liveness check — does not call the LLM."""
-    return HealthResponse(
-        status="ok" if agent is not None else "starting",
-        agent_ready=agent is not None,
-        evaluator_ready=evaluator_bundle is not None,
+    """Liveness: the process is up. Does not touch the LLM or vector store."""
+    return HealthResponse(status="ok")
+
+
+@app.get("/ready", response_model=ReadyResponse)
+async def ready(ctx: Ctx):
+    """Readiness: what was built at startup, with chunk counts per collection."""
+    return ReadyResponse(
+        ready=bool(ctx.agents),
+        collections=[CollectionStatus(name=h.name, description=h.description, chunks=h.count())
+                     for h in ctx.collections.values()],
+        evaluator_ready=ctx.evaluator_bundle is not None,
+        conversations=len(ctx.conversations) if ctx.conversations is not None else 0,
     )
 
+# ---------------------------------------------------------------------------
+# Routes — chat
+# ---------------------------------------------------------------------------
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(body: ChatRequest):
+async def chat(body: ChatRequest, ctx: Ctx):
     """Non-streaming chat. Useful for programmatic clients and testing."""
+    conversation_id, memory = ctx.conversations.get(body.conversation_id)
     try:
-        response = await agent.run(user_msg=body.message, max_iterations=max_iterations, memory=memory)
-        return ChatResponse(response=str(response))
+        result = await run_agent(ctx.agent, body.message, memory, cfg.max_iterations)
     except Exception as e:
-        log.exception("Chat error")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error("Chat", e)
+    return ChatResponse(response=result.response, conversation_id=conversation_id, sources=_sources(result.sources))
 
 
 @app.post("/chat/stream", response_class=EventSourceResponse)
-async def chat_stream(body: ChatRequest):
+async def chat_stream(body: ChatRequest, ctx: Ctx):
     """Streaming chat via SSE. Used by the browser UI.
 
-    Events: unnamed `message` events carry JSON-encoded text deltas; `error` carries an error message;
-    `done` is sent once the agent has finished.
+    Events (data is JSON):
+        delta      — a piece of answer text (string)
+        tool_call  — {"tool": name, "args": {...}} when the agent calls a tool
+        sources    — list of retrieved chunks the agent was given (see Source)
+        done       — {"conversation_id": id, "response": full answer}; pass the id back to continue
+        error      — error message (string)
     """
+    conversation_id, memory = ctx.conversations.get(body.conversation_id)
     try:
-        handler = agent.run(user_msg=body.message, max_iterations=max_iterations, memory=memory)
-        async for event in handler.stream_events():
-            if isinstance(event, AgentStream) and event.delta:
-                yield ServerSentEvent(data=event.delta)
-        await handler
-        yield ServerSentEvent(event="done", data="")
+        async for event in stream_agent(ctx.agent, body.message, memory, cfg.max_iterations):
+            if isinstance(event, AgentDelta):
+                yield ServerSentEvent(event="delta", data=event.text)
+            elif isinstance(event, AgentToolCall):
+                yield ServerSentEvent(event="tool_call", data={"tool": event.tool, "args": event.args})
+            elif isinstance(event, AgentFinished):
+                yield ServerSentEvent(event="sources", data=[s.model_dump() for s in _sources(event.sources)])
+                yield ServerSentEvent(event="done", data={"conversation_id": conversation_id, "response": event.response})
     except Exception as e:
         log.exception("Chat stream error")
-        yield ServerSentEvent(event="error", data=str(e))
+        yield ServerSentEvent(event="error", data=_error_detail("Chat", e))
 
+
+@app.post("/clear")
+async def clear_conversation(body: ClearRequest, ctx: Ctx):
+    """Forget a conversation's history."""
+    found = await ctx.conversations.reset(body.conversation_id)
+    return {"status": "ok", "cleared": found}
+
+# ---------------------------------------------------------------------------
+# Routes — retrieval & documents
+# ---------------------------------------------------------------------------
+
+@app.post("/retrieve", response_model=RetrieveResponse)
+async def retrieve(body: RetrieveRequest, ctx: Ctx):
+    """Search a collection without the agent: the chunks, scores and metadata an agent would see."""
+    handle = _collection(ctx, body.collection)
+    try:
+        chunks = await handle.search(body.query, top_k=body.top_k, filters=body.filters)
+    except Exception as e:
+        raise _internal_error("Retrieval", e)
+    return RetrieveResponse(collection=handle.name, results=_sources(chunks))
+
+
+@app.post("/documents", response_model=AddDocumentsResponse)
+async def add_documents(body: AddDocumentsRequest, ctx: Ctx):
+    """Add or replace documents in a collection at runtime (e.g. a transcript as it arrives).
+
+    Re-posting a document with the same id replaces it. Runtime documents have no source file, so
+    `ingest --reindex` deletes them; use a stream (POST /streams/...) or a file in the collection
+    folder for anything that must survive one.
+    """
+    handle = _collection(ctx, body.collection)
+    docs = [d.model_dump() for d in body.documents]
+    try:
+        # Embedding is blocking (and CPU-bound for local models); keep it off the event loop.
+        ids = await asyncio.to_thread(handle.add_documents, docs)
+    except Exception as e:
+        raise _internal_error("Adding documents", e)
+    return AddDocumentsResponse(collection=handle.name, ids=ids)
+
+@app.post("/ingest", response_model=IngestResponse)
+async def ingest(body: IngestRequest, ctx: Ctx):
+    """Sync collection folders now (as startup auto-ingest does): embed new/changed files and report
+    pending manual files. With include_manual, also embed changed files in manual folders."""
+    handles = [_collection(ctx, body.collection)] if body.collection else list(ctx.collections.values())
+    results = []
+    try:
+        for handle in handles:
+            result = await asyncio.to_thread(handle.sync, body.include_manual)
+            results.append(IngestResult(collection=handle.name, **asdict(result)))
+    except Exception as e:
+        raise _internal_error("Ingest", e)
+    return IngestResponse(results=results)
+
+# ---------------------------------------------------------------------------
+# Routes — streams
+# ---------------------------------------------------------------------------
+
+@app.get("/streams/{collection}", response_model=list[StreamStatus])
+async def list_streams(collection: str, ctx: Ctx):
+    handle = _collection(ctx, collection)
+    return [_stream_status(handle, info) for info in handle.streams.list()]
+
+
+@app.post("/streams/{collection}/{stream_id}", response_model=StreamAppendResponse)
+async def append_to_stream(collection: str, stream_id: str, body: StreamAppendRequest, ctx: Ctx):
+    """Append a fragment (e.g. one utterance) to a stream, creating the stream on first use.
+    It is saved to the stream's file and embedded immediately, so it is searchable at once."""
+    handle = _collection(ctx, collection)
+    try:
+        doc_id = await asyncio.to_thread(handle.append_to_stream, stream_id, body.text, body.metadata)
+    except StreamError as e:
+        raise _stream_error(e)
+    except Exception as e:
+        raise _internal_error("Stream append", e)
+    return StreamAppendResponse(collection=handle.name, stream_id=stream_id, doc_id=doc_id)
+
+
+@app.post("/streams/{collection}/{stream_id}/close", response_model=StreamStatus)
+async def close_stream(collection: str, stream_id: str, body: StreamCloseRequest, ctx: Ctx):
+    """Close a stream. By default its fragments are re-embedded as one normally-chunked document."""
+    handle = _collection(ctx, collection)
+    try:
+        info = await asyncio.to_thread(handle.close_stream, stream_id, body.rechunk, body.metadata)
+    except StreamError as e:
+        raise _stream_error(e)
+    except Exception as e:
+        raise _internal_error("Stream close", e)
+    return _stream_status(handle, info)
+
+# ---------------------------------------------------------------------------
+# Routes — evaluation
+# ---------------------------------------------------------------------------
 
 @app.post("/evaluate", response_model=EvaluateResponse)
-async def evaluate(body: EvaluateRequest):
+async def evaluate(body: EvaluateRequest, ctx: Ctx):
     """Evaluate a supplied answer against the documents retrieved for the question."""
-    _require_evaluator()
+    bundle = _require_evaluator(ctx)
+    handle = _collection(ctx, body.collection)
     try:
-        nodes = await query_engine.aretrieve(QueryBundle(body.question))
+        nodes = await handle.aretrieve(body.question)
         eval_result = await evaluate_answer(
-            bundle=evaluator_bundle,
+            bundle=bundle,
             query=body.question,
             answer=body.answer,
             contexts=[n.get_content() for n in nodes],
         )
-        return EvaluateResponse(
-            question=body.question,
-            answer=body.answer,
-            evaluation=eval_result.summary(),
-        )
     except Exception as e:
-        log.exception("Evaluation error")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error("Evaluation", e)
+    return EvaluateResponse(question=body.question, answer=body.answer, evaluation=eval_result.summary())
 
 
 @app.post("/chat_and_evaluate", response_model=ChatEvalResponse)
-async def chat_and_evaluate(body: ChatRequest):
-    _require_evaluator()
+async def chat_and_evaluate(body: ChatEvalRequest, ctx: Ctx):
+    """Answer from one collection with a query engine (keeps source_nodes), then evaluate the answer."""
+    bundle = _require_evaluator(ctx)
+    handle = _collection(ctx, body.collection)
     try:
-        # Use query_engine directly to preserve source_nodes for evaluation.
-        rag_response = await query_engine.aquery(body.message)
-        answer_str = str(rag_response)
-
-        eval_result = await evaluate_response(
-            bundle=evaluator_bundle,
-            query=body.message,
-            response=rag_response,
-        )
-
-        return ChatEvalResponse(
-            question=body.message,
-            answer=answer_str,
-            evaluation=eval_result.summary(),
-        )
+        rag_response = await handle.as_query_engine().aquery(body.message)
+        eval_result = await evaluate_response(bundle=bundle, query=body.message, response=rag_response)
     except Exception as e:
-        log.exception("Chat and evaluate error")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/clear")
-async def clear_conversation():
-    """Reset the conversation memory."""
-    await memory.areset()
-    return {"status": "ok", "message": "Conversation cleared."}
-
+        raise _internal_error("Chat and evaluate", e)
+    return ChatEvalResponse(
+        question=body.message,
+        answer=str(rag_response),
+        evaluation=eval_result.summary(),
+        sources=_sources(RetrievedChunk.from_node(handle.name, n) for n in rag_response.source_nodes),
+    )
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _require_evaluator() -> None:
+def _sources(chunks) -> list[Source]:
+    return [Source(**asdict(c)) for c in chunks]
+
+
+def _collection(ctx: AppContext, name: str | None) -> CollectionHandle:
+    if name is None:
+        return ctx.default_collection
+    try:
+        return ctx.collection(name)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e.args[0]))
+
+
+def _stream_status(handle: CollectionHandle, info: StreamInfo) -> StreamStatus:
+    return StreamStatus(collection=handle.name, stream_id=info.stream_id, open=info.open,
+                        fragments=info.fragments, granularity=str(info.granularity))
+
+
+def _stream_error(e: StreamError) -> HTTPException:
+    status = 404 if isinstance(e, StreamNotFound) else 409 if isinstance(e, StreamClosed) else 422
+    return HTTPException(status_code=status, detail=str(e))
+
+
+def _require_evaluator(ctx: AppContext):
     """Raise 503 if the evaluator bundle is not configured."""
-    if evaluator_bundle is None:
+    if ctx.evaluator_bundle is None:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Evaluator is not configured. "
-                "Set JUDGE_PROVIDER and JUDGE_MODEL in your .env file."
-            ),
+            detail="Evaluator is not configured. Set JUDGE_MODEL (and optionally JUDGE_PROVIDER) in your .env file.",
         )
+    return ctx.evaluator_bundle
+
+
+def _error_detail(action: str, e: Exception) -> str:
+    """Full error text in dev; a generic message elsewhere (details can include paths or provider responses)."""
+    return f"{action} failed: {e}" if cfg.debug else f"{action} failed. See server logs for details."
+
+
+def _internal_error(action: str, e: Exception) -> HTTPException:
+    log.exception("%s failed", action)
+    return HTTPException(status_code=500, detail=_error_detail(action, e))
 
 
 # ---------------------------------------------------------------------------
@@ -203,5 +335,4 @@ def _require_evaluator() -> None:
 
 if __name__ == "__main__":
     import uvicorn
-    # TODO update reload to be a flag.
-    uvicorn.run("src.fastapi_app:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("src.fastapi_app:app", host="127.0.0.1", port=8000, reload=cfg.debug)

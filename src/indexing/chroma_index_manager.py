@@ -6,6 +6,7 @@ import chromadb
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from llama_index.core import VectorStoreIndex, Document
 from llama_index.core.storage import StorageContext
@@ -114,6 +115,10 @@ class ChromaIndexManager:
             newly_processed=newly_processed,
         )
 
+    def count_where(self, key: str, value: Any) -> int:
+        """Number of chunks whose metadata `key` equals `value`."""
+        return len(self._collection().get(where={key: value}, include=[])["ids"])
+
     def delete_where(self, key: str, values: list[str]) -> int:
         """Delete every chunk whose metadata `key` is one of `values` (e.g. all chunks of a changed file).
 
@@ -154,7 +159,7 @@ class ChromaIndexManager:
         text = schema.text_separator.join(
             str(row[c]) for c in schema.text_columns if c in row.index and str(row[c]).strip()
         )
-        metadata = {col: safe_meta(row.get(col)) for col in meta_cols}
+        metadata = {col: value for col in meta_cols if (value := safe_meta(row.get(col))) is not None}
         return Document(
             text=text,
             metadata=metadata,

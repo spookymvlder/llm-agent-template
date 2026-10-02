@@ -263,6 +263,35 @@
         @keyframes spin { to { transform: rotate(360deg); } }
 
         .row { display: flex; align-items: center; gap: 0.75rem; }
+
+        select {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 0.5rem 0.7rem;
+            font-size: 0.9rem;
+            font-family: inherit;
+            background: white;
+        }
+
+        /* ── Sources (chat) and retrieval results ── */
+        .sources { align-self: flex-start; max-width: 75%; font-size: 0.8rem; color: #555; margin-top: -0.4rem; }
+        .sources summary { cursor: pointer; color: #777; }
+        .sources ol { margin: 0.4rem 0 0 1.2rem; display: flex; flex-direction: column; gap: 0.35rem; }
+
+        .tool-note { align-self: flex-start; font-size: 0.75rem; color: #999; font-family: ui-monospace, monospace; }
+
+        .chunk {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 0.8rem 1rem;
+            font-size: 0.86rem;
+            line-height: 1.5;
+        }
+        .chunk-head { display: flex; justify-content: space-between; gap: 1rem; font-weight: 600; margin-bottom: 0.3rem; }
+        .chunk-score { color: #888; font-weight: 400; white-space: nowrap; }
+        .chunk-meta { font-size: 0.76rem; color: #777; margin-bottom: 0.4rem; font-family: ui-monospace, monospace; word-break: break-word; }
+        .chunk-text { white-space: pre-wrap; word-break: break-word; }
     </style>
 </head>
 <body>
@@ -271,6 +300,7 @@
     <h1>LLM Agent</h1>
     <nav id="nav">
         <button class="nav-btn active" onclick="showPanel('chat', this)">Chat</button>
+        <button class="nav-btn" onclick="showPanel('retrieve', this)">Retrieve</button>
         <button class="nav-btn" onclick="showPanel('evaluate', this)">Evaluate</button>
         <button class="nav-btn" onclick="showPanel('chat-eval', this)">Chat + Eval</button>
     </nav>
@@ -295,6 +325,37 @@
         <textarea id="chat-input" placeholder="Type a message..." rows="1"
             onkeydown="chatKey(event)" oninput="autoResize(this)"></textarea>
         <button class="send-btn" id="chat-send" onclick="sendChat()">Send</button>
+    </div>
+</div>
+
+<!-- ── Retrieve panel ── -->
+<div id="panel-retrieve" class="panel">
+    <div class="endpoint-panel">
+        <div class="field-group">
+            <label>Query</label>
+            <input type="text" id="retrieve-query" placeholder="What should the collection be searched for?"
+                onkeydown="if (event.key === 'Enter') runRetrieve()">
+        </div>
+        <div class="row">
+            <div class="field-group">
+                <label>Collection</label>
+                <select id="retrieve-collection"></select>
+            </div>
+            <div class="field-group">
+                <label>Top k</label>
+                <input type="number" id="retrieve-topk" min="1" max="100" placeholder="default" style="width: 7rem">
+            </div>
+        </div>
+        <div class="field-group">
+            <label>Metadata filters (JSON, optional)</label>
+            <input type="text" id="retrieve-filters" placeholder='{"edition": "2024"}'>
+        </div>
+        <div class="row">
+            <button class="ep-btn" id="retrieve-btn" onclick="runRetrieve()">Retrieve</button>
+            <div class="spinner" id="retrieve-spin"></div>
+        </div>
+        <div class="result-box" id="retrieve-error"></div>
+        <div id="retrieve-results" style="display: flex; flex-direction: column; gap: 0.6rem;"></div>
     </div>
 </div>
 
@@ -362,13 +423,26 @@
         const dot = document.getElementById("status-dot");
         const text = document.getElementById("status-text");
         try {
-            const res = await fetch("/health");
+            const res = await fetch("/ready");
             const data = await res.json();
-            dot.className = data.agent_ready ? "healthy" : "unhealthy";
-            text.textContent = data.agent_ready ? "Online" : "Starting";
+            dot.className = data.ready ? "healthy" : "unhealthy";
+            text.textContent = data.ready ? "Online" : "Starting";
+            fillCollections(data.collections);
         } catch {
             dot.className = "unhealthy";
             text.textContent = "Offline";
+        }
+    }
+
+    function fillCollections(collections) {
+        const select = document.getElementById("retrieve-collection");
+        if (select.options.length) return;
+        for (const c of collections) {
+            const opt = document.createElement("option");
+            opt.value = c.name;
+            opt.textContent = `${c.name} (${c.chunks} chunks)`;
+            opt.title = c.description;
+            select.appendChild(opt);
         }
     }
 
@@ -383,6 +457,11 @@
     const typing = document.getElementById("typing");
     const chatSend = document.getElementById("chat-send");
     const chatInput = document.getElementById("chat-input");
+    let conversationId = null;   // assigned by the server on the first reply
+
+    function appendNode(el) {
+        chatMessages.insertBefore(el, typing);
+    }
 
     function appendMessage(text, role) {
         chatMessages.removeChild(typing);
@@ -422,23 +501,36 @@
             const res = await fetch("/chat/stream", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message: msg }),
+                body: JSON.stringify({ message: msg, conversation_id: conversationId }),
             });
 
             if (!res.ok) {
                 const err = await res.json();
-                appendMessage("Error: " + (err.detail ?? "Unknown error"), "error");
+                appendMessage("Error: " + formatDetail(err.detail), "error");
                 return;
             }
 
-            const agentMsg = appendPartialMessage();
+            let agentMsg = null;
+            let sources = [];
             await readSSE(res, (event, data) => {
-                if (event === "error") {
-                    appendMessage("Error: " + data, "error");
-                } else if (event === "message") {
+                if (event === "delta") {
+                    agentMsg ??= appendPartialMessage();
                     agentMsg.textContent += data;
-                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                } else if (event === "tool_call") {
+                    // Text streamed before a tool call is the model thinking aloud; start a fresh bubble after.
+                    appendNode(textEl("div", "tool-note", "→ " + data.tool + " " + JSON.stringify(data.args)));
+                    agentMsg = null;
+                } else if (event === "sources") {
+                    sources = data;
+                } else if (event === "done") {
+                    conversationId = data.conversation_id;
+                    // Providers that don't stream deliver the answer only here.
+                    if (!agentMsg && data.response) appendMessage(data.response, "agent");
+                    if (sources.length) appendNode(renderSources(sources));
+                } else if (event === "error") {
+                    appendMessage("Error: " + data, "error");
                 }
+                chatMessages.scrollTop = chatMessages.scrollHeight;
             });
         } catch (e) {
             appendMessage("Network error: " + e.message, "error");
@@ -478,7 +570,16 @@
     }
 
     async function clearChat() {
-        try { await fetch("/clear", { method: "POST" }); } catch {}
+        if (conversationId) {
+            try {
+                await fetch("/clear", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ conversation_id: conversationId }),
+                });
+            } catch {}
+        }
+        conversationId = null;
         [...chatMessages.children].forEach(el => {
             if (el !== typing) chatMessages.removeChild(el);
         });
@@ -487,6 +588,91 @@
 
     function chatKey(e) {
         if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Sources & retrieval
+    // ---------------------------------------------------------------------------
+
+    function textEl(tag, className, text) {
+        const el = document.createElement(tag);
+        if (className) el.className = className;
+        el.textContent = text;
+        return el;
+    }
+
+    function sourceLabel(s) {
+        const m = s.metadata || {};
+        const name = m.source_path || m.file_name || s.doc_id || "document";
+        return s.collection + ": " + name + (m.page_label ? " p." + m.page_label : "");
+    }
+
+    // Collapsible list under an answer: which chunks the agent was given.
+    function renderSources(sources) {
+        const details = document.createElement("details");
+        details.className = "sources";
+        details.appendChild(textEl("summary", "", sources.length + " source" + (sources.length === 1 ? "" : "s")));
+        const list = document.createElement("ol");
+        for (const s of sources) {
+            const item = document.createElement("li");
+            item.appendChild(textEl("strong", "", sourceLabel(s)));
+            item.appendChild(document.createTextNode(" — " + s.text.slice(0, 240) + (s.text.length > 240 ? "…" : "")));
+            list.appendChild(item);
+        }
+        details.appendChild(list);
+        return details;
+    }
+
+    const HIDDEN_META = new Set(["file_hash", "file_path", "file_size", "file_type", "creation_date", "last_modified_date", "last_accessed_date"]);
+
+    function renderChunk(s) {
+        const box = textEl("div", "chunk", "");
+        const head = textEl("div", "chunk-head", "");
+        head.appendChild(textEl("span", "", sourceLabel(s)));
+        head.appendChild(textEl("span", "chunk-score", s.score == null ? "" : "score " + s.score.toFixed(3)));
+        box.appendChild(head);
+        const meta = Object.entries(s.metadata || {}).filter(([k]) => !HIDDEN_META.has(k));
+        box.appendChild(textEl("div", "chunk-meta", meta.map(([k, v]) => k + "=" + v).join("  ")));
+        box.appendChild(textEl("div", "chunk-text", s.text));
+        return box;
+    }
+
+    async function runRetrieve() {
+        const query = document.getElementById("retrieve-query").value.trim();
+        if (!query) return;
+        const results = document.getElementById("retrieve-results");
+        results.replaceChildren();
+        showResult("retrieve-error", "", false, false);
+
+        const body = { query, collection: document.getElementById("retrieve-collection").value || null };
+        const topK = document.getElementById("retrieve-topk").value.trim();
+        if (topK) body.top_k = parseInt(topK);
+        const filters = document.getElementById("retrieve-filters").value.trim();
+        if (filters) {
+            try { body.filters = JSON.parse(filters); }
+            catch { showResult("retrieve-error", "Filters must be a JSON object, e.g. {\"edition\": \"2024\"}", false, true); return; }
+        }
+
+        setLoading("retrieve", true);
+        try {
+            const res = await fetch("/retrieve", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                showResult("retrieve-error", "Error: " + formatDetail(data.detail), false, true);
+            } else if (!data.results.length) {
+                showResult("retrieve-error", "No results.", false, false);
+            } else {
+                data.results.forEach(s => results.appendChild(renderChunk(s)));
+            }
+        } catch (e) {
+            showResult("retrieve-error", "Network error: " + e.message, false, true);
+        } finally {
+            setLoading("retrieve", false);
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -507,7 +693,7 @@
             });
             const data = await res.json();
             if (!res.ok) {
-                showResult("eval-result", "Error: " + (data.detail ?? res.statusText), false, true);
+                showResult("eval-result", "Error: " + formatDetail(data.detail), false, true);
             } else {
                 showResult("eval-result", formatEval(data.evaluation), true, false);
             }
@@ -536,7 +722,7 @@
             });
             const data = await res.json();
             if (!res.ok) {
-                showResult("chateval-answer", "Error: " + (data.detail ?? res.statusText), false, true);
+                showResult("chateval-answer", "Error: " + formatDetail(data.detail), false, true);
             } else {
                 showResult("chateval-answer", data.answer, true, false);
                 showResult("chateval-eval", formatEval(data.evaluation), true, false);
@@ -556,6 +742,12 @@
         document.getElementById(prefix + "-btn").disabled = on;
         const spin = document.getElementById(prefix + "-spin");
         if (spin) spin.className = "spinner" + (on ? " visible" : "");
+    }
+
+    // HTTPException details are strings; request validation errors (422) are a list of objects.
+    function formatDetail(detail) {
+        if (Array.isArray(detail)) return detail.map(d => (d.loc ? d.loc.slice(1).join(".") + ": " : "") + d.msg).join("; ");
+        return detail ?? "Unknown error";
     }
 
     function showResult(id, text, success, error) {
