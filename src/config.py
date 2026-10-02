@@ -17,6 +17,7 @@ from src.config_helpers import (
     as_float,
     as_int,
     as_list,
+    optional_bool,
     optional_embedder,
     optional_provider,
     optional_str,
@@ -344,11 +345,12 @@ def _primary_llm() -> LlmSettings:
         temperature=as_float(os.getenv("LLM_TEMPERATURE"), default=0.2),
         max_tokens=_max_tokens(os.getenv("LLM_MAX_TOKENS"), default=None),
         rate_limit_rpm=as_int(os.getenv("LLM_RATE_LIMIT_RPM"), default=0, min=0),
+        thinking=optional_bool(os.getenv("LLM_THINKING")),
     )
 
 
 def _llm_role(prefix: str, fallback: LlmSettings, optional: bool = False) -> LlmSettings | None:
-    """Read {PREFIX}_PROVIDER / _MODEL / _TEMPERATURE / _CONTEXT_WINDOW / _MAX_TOKENS / _RATE_LIMIT_RPM.
+    """Read {PREFIX}_PROVIDER / _MODEL / _TEMPERATURE / _CONTEXT_WINDOW / _MAX_TOKENS / _RATE_LIMIT_RPM / _THINKING.
 
     Anything unset falls back to the primary LLM's value. If {PREFIX}_MODEL is unset, an optional role
     is disabled (None) and a required role reuses the primary model.
@@ -373,7 +375,12 @@ def _llm_role(prefix: str, fallback: LlmSettings, optional: bool = False) -> Llm
         context_window=as_int(os.getenv(f"{prefix}_CONTEXT_WINDOW"), default=fallback.context_window, min=512),
         max_tokens=_max_tokens(os.getenv(f"{prefix}_MAX_TOKENS"), default=fallback.max_tokens),
         rate_limit_rpm=as_int(os.getenv(f"{prefix}_RATE_LIMIT_RPM"), default=fallback.rate_limit_rpm, min=0),
+        thinking=_or(optional_bool(os.getenv(f"{prefix}_THINKING")), fallback.thinking),
     )
+
+
+def _or(value, fallback):
+    return fallback if value is None else value
 
 
 def _collections(project_root: Path, raw_dir: Path, default_top_k: int) -> tuple[CollectionSettings, ...]:

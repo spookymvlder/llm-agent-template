@@ -9,14 +9,13 @@ from typing import Mapping, Sequence
 
 import chromadb
 from llama_index.core import Settings
-from llama_index.core.postprocessor.types import BaseNodePostprocessor
 
 from src.agent_setup import build_generic_tools, build_memory, build_rag_agent
 from src.app_context import DEFAULT_AGENT, AppContext, Profile
 from src.config import CONFIG as cfg
 from src.config_helpers import LlmSettings
 from src.evaluation import build_evaluator
-from src.indexing import CollectionHandle, open_collection
+from src.indexing import CollectionHandle, CollectionOptions, open_collection
 from src.llm import build_llm_from_settings, configure_llamaindex
 from src.logging_setup import setup_logging
 from src.providers import EmbeddingProvider, LLMProvider
@@ -74,12 +73,12 @@ def _check_ollama(profile: Profile) -> None:
 
 def _open_collections(
     names: Sequence[str] | None,
-    postprocessors: Mapping[str, Sequence[BaseNodePostprocessor]],
+    options: Mapping[str, CollectionOptions],
 ) -> dict[str, CollectionHandle]:
     selected = [cfg.collection(n) for n in names] if names else list(cfg.collections)
-    unknown = set(postprocessors) - {c.name for c in cfg.collections}
+    unknown = set(options) - {c.name for c in cfg.collections}
     if unknown:
-        raise KeyError(f"Postprocessors given for unknown collection(s): {', '.join(sorted(unknown))}")
+        raise KeyError(f"Options given for unknown collection(s): {', '.join(sorted(unknown))}")
 
     client = chromadb.PersistentClient(path=str(cfg.chroma_dir))
     return {
@@ -89,7 +88,7 @@ def _open_collections(
             chroma_dir=cfg.chroma_dir,
             manifest_dir=cfg.env_dir / "manifests",
             distance_metric=cfg.distance_metric,
-            postprocessors=postprocessors.get(c.name, ()),
+            options=options.get(c.name),
         )
         for c in selected
     }
@@ -127,7 +126,7 @@ def bootstrap(
     *,
     collections: Sequence[str] | None = None,
     reindex: bool = False,
-    postprocessors: Mapping[str, Sequence[BaseNodePostprocessor]] | None = None,
+    options: Mapping[str, CollectionOptions] | None = None,
 ) -> AppContext:
     """Build everything the given profile needs and return it as an AppContext.
 
@@ -141,8 +140,8 @@ def bootstrap(
         profile:        What to build; see Profile.
         collections:    Names of collections to open. Default: all of COLLECTIONS.
         reindex:        Delete and re-embed the opened collections before ingesting (implies ingest).
-        postprocessors: Node postprocessors per collection name, applied after retrieval and
-                        before the LLM (e.g. {"rules": [EditionNotePostprocessor()]}).
+        options:        Per-collection schema, preprocessing steps and retrieval postprocessors, e.g.
+                        {"rules": CollectionOptions(steps=[tag_edition], postprocessors=[EditionNote()])}.
 
     Raises:
         ConfigError:  Invalid configuration.
@@ -155,7 +154,7 @@ def bootstrap(
     _check_ollama(profile)
     configure_llamaindex(cfg.llm_settings if needs_llm else None, cfg.embedder_settings)
 
-    handles = _open_collections(collections, postprocessors or {})
+    handles = _open_collections(collections, options or {})
     if profile == Profile.INGEST or cfg.auto_ingest or reindex:
         _ingest(handles, reindex)
     _warn_empty(handles)

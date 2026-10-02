@@ -14,11 +14,27 @@ from llama_index.core.schema import NodeWithScore
 from src.config_helpers import CollectionSettings
 from src.indexing.chroma_index_manager import ChromaIndexManager
 from src.indexing.index_manager import IndexManager
+from src.preprocessing import PreprocessStep, preprocess
+from src.schema import SOURCE_PATH, DocumentSchema
 
 log = logging.getLogger(__name__)
 
-# Chunk metadata key holding the file's path relative to the collection folder (set by IndexManager).
-_SOURCE_PATH_KEY = "source_path"
+
+@dataclass
+class CollectionOptions:
+    """Code-level customisation for one collection (config covers names, folders, top_k, description).
+
+    Args:
+        schema:         How rows become documents: text columns, tabular mode, metadata visibility.
+        steps:          Preprocessing functions (DataFrame -> DataFrame) run before sanitisation, e.g.
+                        tagging rows or deriving columns. See src/preprocessing/pipeline.py.
+        postprocessors: LlamaIndex node postprocessors run after retrieval, before the LLM.
+
+    Changing the schema or steps doesn't re-embed existing documents; run `ingest -c <name> --reindex`.
+    """
+    schema: DocumentSchema = field(default_factory=DocumentSchema)
+    steps: Sequence[PreprocessStep] = ()
+    postprocessors: Sequence[BaseNodePostprocessor] = ()
 
 
 @dataclass
@@ -44,7 +60,11 @@ class CollectionHandle:
     store: ChromaIndexManager
     files: IndexManager
     index: VectorStoreIndex
-    postprocessors: list[BaseNodePostprocessor] = field(default_factory=list)
+    options: CollectionOptions = field(default_factory=CollectionOptions)
+
+    @property
+    def postprocessors(self) -> list[BaseNodePostprocessor]:
+        return list(self.options.postprocessors)
 
     @property
     def name(self) -> str:
@@ -105,8 +125,9 @@ class CollectionHandle:
 
         if to_embed:
             if result.changed_files:
-                result.chunks_removed = self.store.delete_where(_SOURCE_PATH_KEY, result.changed_files)
-            built = self.store.load_or_build(self.files.load_as_dataframe(to_embed))
+                result.chunks_removed = self.store.delete_where(SOURCE_PATH, result.changed_files)
+            df = preprocess(self.files.load_as_dataframe(to_embed), self.options.schema, self.options.steps)
+            built = self.store.load_or_build(df)
             result.documents_added = len(built.newly_processed)
         self.files.commit(to_embed + changes.touched)
         return result
@@ -125,21 +146,25 @@ def open_collection(
     chroma_dir: Path,
     manifest_dir: Path,
     distance_metric: str,
-    postprocessors: Sequence[BaseNodePostprocessor] = (),
+    options: CollectionOptions | None = None,
 ) -> CollectionHandle:
     """Open (creating if needed) a collection. Does not ingest anything."""
+    options = options or CollectionOptions()
     store = ChromaIndexManager(
         chroma_dir=chroma_dir,
         collection_name=settings.name,
-        text_column="text",
-        id_column="doc_id",
+        schema=options.schema,
         distance_metric=distance_metric,
         client=client,
     )
     return CollectionHandle(
         settings=settings,
         store=store,
-        files=IndexManager(raw_dir=settings.raw_dir, manifest_path=manifest_dir / f"{settings.name}.json"),
+        files=IndexManager(
+            raw_dir=settings.raw_dir,
+            manifest_path=manifest_dir / f"{settings.name}.json",
+            schema=options.schema,
+        ),
         index=store.load_or_build().index,
-        postprocessors=list(postprocessors),
+        options=options,
     )

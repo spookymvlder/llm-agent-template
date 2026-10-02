@@ -78,7 +78,8 @@ EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 | `LLM_PROVIDER` | `ollama` | `ollama`, `openai`, `anthropic`, `gemini` |
 | `LLM_MODEL` | `qwen3` | Model name for the selected provider |
 | `LLM_TEMPERATURE` / `LLM_CONTEXT_WINDOW` / `LLM_MAX_TOKENS` / `LLM_RATE_LIMIT_RPM` | `0.2` / `8192` / provider default / unlimited | Primary LLM tuning. Context window applies to Ollama only |
-| `ROUTER_*`, `JUDGE_*` | fall back to `LLM_*` | Same suffixes as `LLM_*` (`_PROVIDER`, `_MODEL`, `_TEMPERATURE`, ...). The judge (evaluation) is disabled unless `JUDGE_MODEL` is set |
+| `LLM_THINKING` | model default | Ollama reasoning models: `true`/`false` turns thinking on/off |
+| `ROUTER_*`, `JUDGE_*` | fall back to `LLM_*` | Same suffixes as `LLM_*` (`_PROVIDER`, `_MODEL`, `_TEMPERATURE`, `_THINKING`, ...). The judge (evaluation) is disabled unless `JUDGE_MODEL` is set |
 | `ENABLE_ROUTER` | `false` | Classify queries with the router LLM before running an agent |
 | `EMBEDDING_PROVIDER` | `huggingface` | `huggingface` or `ollama` |
 | `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model name |
@@ -139,7 +140,10 @@ src/
   indexing/
     chroma_index_manager.py # ChromaDB-backed VectorStoreIndex for one collection
     collections.py          # CollectionHandle: store + files + index + postprocessors
-    index_manager.py        # File discovery, manifest tracking
+    index_manager.py        # File discovery, change detection, _metadata.json, table reading
+  preprocessing/
+    pipeline.py             # preprocess(df, schema, steps)
+    sanitizer.py            # Text normalisation, Chroma-safe metadata, dedupe
   llm/
     llamaindex_setup.py     # Configures LlamaIndex Settings globals
     llm_factory.py          # Builds LLM instances from LlmSettings
@@ -152,6 +156,7 @@ src/
   main.py                   # CLI entry point (serve / chat / ingest)
   models.py                 # Pydantic models for API schemas
   providers.py              # LLMProvider and EmbeddingProvider enums
+  schema.py                 # DocumentSchema: text/metadata columns, tabular mode, metadata visibility
   startup.py                # bootstrap(profile) — builds an AppContext
 
 data/
@@ -197,13 +202,47 @@ Each document gets a stable id (`<path relative to the collection folder>#<posit
 
 `COLLECTIONS=rules,transcripts` creates two collections, each with its own folder, search tool and optional `COLLECTION_<NAME>_DESCRIPTION` (which tells the agent when to search it). Use separate collections for different kinds of content; use metadata for variations within one kind (e.g. rulebook edition).
 
-### Retrieval postprocessors
+### Folder metadata
 
-Per-collection LlamaIndex node postprocessors run after retrieval and before the LLM sees the chunks — the place for deterministic handling based on metadata:
+A `_metadata.json` object in any folder under `data/raw/<collection>/` is added to every file in that folder and below (nearer folders override). Editing it re-embeds the files it covers.
+
+```
+data/raw/rules/
+  2014/_metadata.json   {"edition": "2014"}
+  2014/PHB.pdf
+  2024/_metadata.json   {"edition": "2024"}
+  2024/PHB.pdf
+```
+
+Metadata is shown to the LLM with each retrieved chunk and can be used in filters, but is **not** embedded by default, so tags don't skew similarity. File bookkeeping (hashes, sizes, dates) is hidden from the LLM.
+
+### Per-collection options (schema, preprocessing, postprocessors)
+
+Code-level customisation is passed to `bootstrap()` per collection:
 
 ```python
-ctx = bootstrap(Profile.SERVE, postprocessors={"rules": [MyEditionPostprocessor()]})
+from src.indexing import CollectionOptions
+from src.schema import DocumentSchema
+
+def tag_speaker(df):                     # preprocessing step: DataFrame -> DataFrame
+    df["speaker"] = df["text"].str.extract(r"^(\w+):")
+    return df
+
+options = {
+    "rules": CollectionOptions(postprocessors=[MyEditionPostprocessor()]),
+    "papers": CollectionOptions(
+        schema=DocumentSchema(tabular=True, id_column="id", text_columns=("title", "abstract")),
+    ),
+    "transcripts": CollectionOptions(steps=[tag_speaker]),
+}
+ctx = bootstrap(Profile.SERVE, options=options)
 ```
+
+- **`DocumentSchema`** — which columns are text, which metadata is embedded (`embed_metadata_keys`) or hidden from the LLM, and `tabular=True` to read `.csv` / `.jsonl` / `.parquet` (needs `pyarrow`) as one document per row.
+- **`steps`** — run before sanitisation, which normalises whitespace, drops empty rows and duplicate ids, and coerces metadata (lists, dicts, enums, NaN) to Chroma-safe values.
+- **`postprocessors`** — LlamaIndex node postprocessors run after retrieval and before the LLM sees the chunks: the place for deterministic handling based on metadata.
+
+Changing a schema or steps doesn't re-embed existing documents; run `ingest -c <name> --reindex`.
 
 ---
 

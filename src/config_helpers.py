@@ -18,6 +18,13 @@ def as_bool(value: str | None, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "t", "yes", "y", "on"}
 
 
+def optional_bool(value: str | None) -> bool | None:
+    """Like as_bool, but unset/empty means None ('use the default')."""
+    if value is None or value.strip() == "":
+        return None
+    return as_bool(value)
+
+
 def as_float(value: str | None, default: float) -> float:
     if value is None or value.strip() == "":
         return default
@@ -100,6 +107,7 @@ class LlmSettings:
     temperature: float | None = None
     max_tokens: int | None = None        # None = provider default; Ollama maps this to num_predict
     rate_limit_rpm: int = 0              # 0 = unlimited
+    thinking: bool | None = None         # Ollama only: reasoning-model thinking; None = model default
 
 
 @dataclass(frozen=True)

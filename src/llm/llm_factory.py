@@ -1,14 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import os
 import logging
 from dataclasses import dataclass
 from typing import Any
 
-from llama_index.llms.openai import OpenAI
-from llama_index.llms.google_genai import GoogleGenAI
-from llama_index.llms.anthropic import Anthropic
-from llama_index.llms.ollama import Ollama
+from llama_index.core.rate_limiter import TokenBucketRateLimiter
 
 from src.config_helpers import LlmSettings
 from src.providers import API_KEY_ENV_VARS, LLMProvider
@@ -18,16 +16,25 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class _ProviderSpec:
-    cls: type
-    env_var: str           # env var name to check when api_key is not passed
-    api_key_param: str     # kwarg name the LLM class expects for the key
+    module: str            # imported on first use, so uninstalled providers don't break the others
+    class_name: str
+    package: str           # pip package that provides `module`
+    env_var: str | None    # env var name to check when api_key is not passed (None = no key needed)
+    api_key_param: str = "api_key"   # kwarg name the LLM class expects for the key
+
+    def load_class(self) -> type:
+        try:
+            return getattr(importlib.import_module(self.module), self.class_name)
+        except ImportError as e:
+            raise ValueError(f"The '{self.package}' package is required for this provider: pip install {self.package}") from e
 
 
 # Registry — add new providers here, nothing else needs to change.
 _REGISTRY: dict[str, _ProviderSpec] = {
-    LLMProvider.OPENAI:    _ProviderSpec(cls=OpenAI,      env_var=API_KEY_ENV_VARS[LLMProvider.OPENAI],    api_key_param="api_key"),
-    LLMProvider.GEMINI:    _ProviderSpec(cls=GoogleGenAI, env_var=API_KEY_ENV_VARS[LLMProvider.GEMINI],    api_key_param="api_key"),
-    LLMProvider.ANTHROPIC: _ProviderSpec(cls=Anthropic,   env_var=API_KEY_ENV_VARS[LLMProvider.ANTHROPIC], api_key_param="api_key"),
+    LLMProvider.OLLAMA:    _ProviderSpec("llama_index.llms.ollama",       "Ollama",      "llama-index-llms-ollama",       None),
+    LLMProvider.OPENAI:    _ProviderSpec("llama_index.llms.openai",       "OpenAI",      "llama-index-llms-openai",       API_KEY_ENV_VARS[LLMProvider.OPENAI]),
+    LLMProvider.GEMINI:    _ProviderSpec("llama_index.llms.google_genai", "GoogleGenAI", "llama-index-llms-google-genai", API_KEY_ENV_VARS[LLMProvider.GEMINI]),
+    LLMProvider.ANTHROPIC: _ProviderSpec("llama_index.llms.anthropic",    "Anthropic",   "llama-index-llms-anthropic",    API_KEY_ENV_VARS[LLMProvider.ANTHROPIC]),
 }
 
 
@@ -50,33 +57,25 @@ def build_llm(
         A LlamaIndex LLM instance.
 
     Raises:
-        ValueError: Unknown provider, missing API key, or failed initialization.
+        ValueError: Unknown provider, provider package not installed, missing API key, or failed initialization.
     """
     provider = provider.lower()
-
-    # Ollama is local — no API key needed, just pass kwargs through.
-    if provider == LLMProvider.OLLAMA:
-        try:
-            return Ollama(model=model, **kwargs)
-        except Exception as e:
-            raise ValueError(f"Failed to initialize Ollama LLM: {e}") from e
-
     spec = _REGISTRY.get(provider)
     if spec is None:
-        supported = ", ".join(sorted(_REGISTRY) + [LLMProvider.OLLAMA])
-        raise ValueError(
-            f"Unknown LLM provider '{provider}'. Supported: {supported}"
-        )
+        raise ValueError(f"Unknown LLM provider '{provider}'. Supported: {', '.join(sorted(_REGISTRY))}")
+    cls = spec.load_class()
 
-    resolved_key = api_key or os.getenv(spec.env_var)
-    if not resolved_key:
-        raise ValueError(
-            f"{spec.env_var} is required for the '{provider}' provider. "
-            f"Set it in your .env file or pass it as api_key."
-        )
+    if spec.env_var:
+        resolved_key = api_key or os.getenv(spec.env_var)
+        if not resolved_key:
+            raise ValueError(
+                f"{spec.env_var} is required for the '{provider}' provider. "
+                f"Set it in your .env file or pass it as api_key."
+            )
+        kwargs[spec.api_key_param] = resolved_key
 
     try:
-        return spec.cls(model=model, **{spec.api_key_param: resolved_key}, **kwargs)
+        return cls(model=model, **kwargs)
     except Exception as e:
         raise ValueError(f"Failed to initialize {provider} LLM: {e}") from e
 
@@ -84,27 +83,35 @@ def build_llm(
 def build_llm_from_settings(settings: LlmSettings) -> Any:
     """Build an LLM from an LlmSettings slice of AppConfig.
 
-    Ollama-only settings (base_url, request_timeout, context_window) are only
-    forwarded to Ollama; hosted providers use their own defaults. max_tokens is
-    passed as num_predict for Ollama and as max_tokens for hosted providers.
+    Only settings a provider understands are passed to it:
+      - Ollama: base_url, request_timeout, context_window, thinking, and max_tokens as num_predict.
+      - Hosted providers: max_tokens.
+      - All: temperature, and a rate limiter when rate_limit_rpm > 0.
 
     Raises:
-        ValueError: Unknown provider, missing API key, or failed initialization.
+        ValueError: Unknown provider, provider package not installed, missing API key, or failed initialization.
     """
     kwargs: dict[str, Any] = {}
     if settings.temperature is not None:
         kwargs["temperature"] = settings.temperature
+    if settings.rate_limit_rpm > 0:
+        kwargs["rate_limiter"] = TokenBucketRateLimiter(requests_per_minute=settings.rate_limit_rpm)
+
     if settings.provider == LLMProvider.OLLAMA:
         ollama_kwargs = {
             "base_url": settings.base_url,
             "request_timeout": settings.request_timeout,
             "context_window": settings.context_window,
+            "thinking": settings.thinking,
         }
         kwargs.update({k: v for k, v in ollama_kwargs.items() if v is not None})
         if settings.max_tokens is not None:
             kwargs["additional_kwargs"] = {"num_predict": settings.max_tokens}
-    elif settings.max_tokens is not None:
-        kwargs["max_tokens"] = settings.max_tokens
+    else:
+        if settings.max_tokens is not None:
+            kwargs["max_tokens"] = settings.max_tokens
+        if settings.thinking is not None:
+            log.warning("*_THINKING only applies to Ollama models; ignored for %s/%s.", settings.provider, settings.model)
 
     return build_llm(
         provider=settings.provider,

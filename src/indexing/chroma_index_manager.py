@@ -11,6 +11,9 @@ from llama_index.core import VectorStoreIndex, Document
 from llama_index.core.storage import StorageContext
 from llama_index.vector_stores.chroma import ChromaVectorStore
 
+from src.preprocessing import safe_meta
+from src.schema import DOC_ID, DocumentSchema
+
 log = logging.getLogger(__name__)
 
 # LlamaIndex stores each chunk's parent document id under this Chroma metadata key.
@@ -35,15 +38,14 @@ class ChromaIndexManager:
     - Returns a LlamaIndex VectorStoreIndex so the rest of your agent code
       (query engine, tools) needs no changes.
 
+    Expects DataFrames shaped by the collection's DocumentSchema (see IndexManager / preprocess()):
+    a `doc_id` column, the schema's text columns and metadata columns. Rows without a `doc_id`
+    fall back to the row index, which is only stable if the DataFrame is.
+
     Args:
         chroma_dir:     Directory where ChromaDB persists its data.
         collection_name: Name of the ChromaDB collection to use.
-        text_column:    DataFrame column containing the text to embed.
-        id_column:      DataFrame column to use as the document ID.
-                        Must be unique per document and stable across runs, or
-                        re-ingesting will create duplicates. If None, the row index is used.
-        metadata_columns: Columns to store as document metadata.
-                        If None, all columns except text_column and id_column are used.
+        schema:         Which columns are text vs metadata, and which metadata the embedder and LLM see.
         distance_metric: HNSW space for new collections: 'cosine', 'l2' or 'ip'.
                         Ignored for collections that already exist.
         client:         Shared ChromaDB client. One is created for chroma_dir if not given.
@@ -54,17 +56,13 @@ class ChromaIndexManager:
         *,
         chroma_dir: Path,
         collection_name: str = "documents",
-        text_column: str = "text",
-        id_column: str | None = None,
-        metadata_columns: list[str] | None = None,
+        schema: DocumentSchema | None = None,
         distance_metric: str = "cosine",
         client: chromadb.ClientAPI | None = None,
     ) -> None:
         self.chroma_dir = chroma_dir
         self.collection_name = collection_name
-        self.text_column = text_column
-        self.id_column = id_column
-        self.metadata_columns = metadata_columns
+        self.schema = schema or DocumentSchema()
         self.distance_metric = distance_metric
 
         if client is None:
@@ -146,15 +144,25 @@ class ChromaIndexManager:
             metadata={"hnsw:space": self.distance_metric},
         )
 
-    def _resolve_metadata_columns(self, df: pd.DataFrame) -> list[str]:
-        if self.metadata_columns is not None:
-            return self.metadata_columns
-        return [c for c in df.columns if c not in (self.text_column, self.id_column)]
-
     def _row_id(self, row: pd.Series, idx: int) -> str:
-        if self.id_column and self.id_column in row.index:
-            return str(row[self.id_column])
+        if DOC_ID in row.index:
+            return str(row[DOC_ID])
         return str(idx)
+
+    def _to_document(self, doc_id: str, row: pd.Series, meta_cols: list[str]) -> Document:
+        schema = self.schema
+        text = schema.text_separator.join(
+            str(row[c]) for c in schema.text_columns if c in row.index and str(row[c]).strip()
+        )
+        metadata = {col: safe_meta(row.get(col)) for col in meta_cols}
+        return Document(
+            text=text,
+            metadata=metadata,
+            id_=doc_id,
+            # Embeddings represent content only (plus any embed_metadata_keys); the LLM sees all but bookkeeping.
+            excluded_embed_metadata_keys=[k for k in metadata if k not in schema.embed_metadata_keys],
+            excluded_llm_metadata_keys=[k for k in metadata if k in schema.hidden_llm_metadata_keys],
+        )
 
     def _existing_doc_ids(self, collection, doc_ids: list[str]) -> set[str]:
         existing: set[str] = set()
@@ -165,7 +173,7 @@ class ChromaIndexManager:
         return existing
 
     def _new_documents(self, df: pd.DataFrame, collection) -> list[Document]:
-        meta_cols = self._resolve_metadata_columns(df)
+        meta_cols = self.schema.metadata_for(df.columns)
         rows = [(self._row_id(row, idx), row) for idx, row in df.iterrows()]
         existing = self._existing_doc_ids(collection, [doc_id for doc_id, _ in rows])
 
@@ -175,17 +183,10 @@ class ChromaIndexManager:
             if doc_id in existing or doc_id in seen:
                 continue
             seen.add(doc_id)
-            metadata = {col: _safe_meta(row.get(col)) for col in meta_cols}
-            docs.append(Document(text=str(row[self.text_column]), metadata=metadata, id_=doc_id))
+            docs.append(self._to_document(doc_id, row, meta_cols))
 
         skipped = len(rows) - len(docs)
         if skipped:
             log.info("Skipped %d document(s) already in '%s' or duplicated in the input.", skipped, self.collection_name)
         return docs
 
-
-def _safe_meta(value) -> str | int | float | bool:
-    """ChromaDB metadata values must be scalar — coerce everything else to str."""
-    if isinstance(value, (str, int, float, bool)):
-        return value
-    return str(value)

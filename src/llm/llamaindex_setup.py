@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Sequence
-
 from llama_index.core import Settings
 from llama_index.core.node_parser import SentenceSplitter
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.embeddings.ollama import OllamaEmbedding
 
 from src.config import LlmSettings, EmbedderSettings
 from src.llm.llm_factory import build_llm_from_settings
@@ -70,6 +66,7 @@ def _build_embedding_model(embedder_settings: EmbedderSettings):
     try:
         if embedder_settings.provider == EmbeddingProvider.OLLAMA:
             log.info("Building Ollama embeddings at %s...", embedder_settings.base_url)
+            from llama_index.embeddings.ollama import OllamaEmbedding  # imported lazily: optional backend
             return OllamaEmbedding(
                 model_name=embedder_settings.model,
                 base_url=embedder_settings.base_url,
@@ -77,6 +74,7 @@ def _build_embedding_model(embedder_settings: EmbedderSettings):
             )
         elif embedder_settings.provider == EmbeddingProvider.HUGGINGFACE:
             log.info("Building HuggingFace embeddings: %s on %s...", embedder_settings.model, embedder_settings.device)
+            from llama_index.embeddings.huggingface import HuggingFaceEmbedding  # imported lazily: loads torch
             return HuggingFaceEmbedding(
                 model_name=embedder_settings.model,
                 device=embedder_settings.device,
