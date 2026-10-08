@@ -11,7 +11,18 @@ from typing import Any
 
 from llama_index.core import SimpleDirectoryReader
 
-from src.schema import DOC_ID, FILE_HASH, MODE_KEY, RESERVED_PREFIX, SOURCE_PATH, DocumentSchema, FileMode
+from src.indexing.pdf_reader import looks_glued, pdf_extractor
+from src.schema import (
+    DESCRIPTION_KEY,
+    DOC_ID,
+    FILE_HASH,
+    MODE_KEY,
+    RESERVED_KEYS,
+    RESERVED_PREFIX,
+    SOURCE_PATH,
+    DocumentSchema,
+    FileMode,
+)
 
 log = logging.getLogger(__name__)
 
@@ -227,15 +238,17 @@ class IndexManager:
     def _read_documents(self, records: list[FileRecord]) -> pd.DataFrame:
         """One row per LlamaIndex Document (e.g. one page of a PDF, or a whole text file)."""
         by_path = {str(r.path.resolve()): r for r in records}
-        docs = SimpleDirectoryReader(input_files=list(by_path)).load_data()
+        docs = SimpleDirectoryReader(input_files=list(by_path), file_extractor=pdf_extractor()).load_data()
 
         text_col = self.schema.text_columns[0]
         rows = []
         position: dict[str, int] = {}
+        text_by_file: dict[str, list[str]] = {}
         for doc in docs:
             record = by_path[str(Path(doc.metadata["file_path"]).resolve())]
             n = position.get(record.rel_path, 0)
             position[record.rel_path] = n + 1
+            text_by_file.setdefault(record.rel_path, []).append(doc.text)
             rows.append({
                 **record.folder_metadata,
                 **doc.metadata,
@@ -244,6 +257,12 @@ class IndexManager:
                 SOURCE_PATH: record.rel_path,
                 FILE_HASH: record.sha256,
             })
+        for rel_path, texts in text_by_file.items():
+            if looks_glued(" ".join(texts)):
+                hint = ("Reindex after checking the source file." if pdf_extractor()
+                        else "Install PyMuPDF (pip install pymupdf) and reindex.")
+                log.warning("[%s] Text extracted from %s looks like it is missing spaces between words; "
+                            "retrieval will be poor. %s", self._label, rel_path, hint)
         return pd.DataFrame(rows)
 
     def _read_table(self, record: FileRecord) -> pd.DataFrame:
@@ -312,17 +331,36 @@ class IndexManager:
         inherited = {} if resolved == root or root not in resolved.parents else self._folder_metadata(folder.parent, cache)
 
         merged = dict(inherited)
-        meta_file = folder / METADATA_FILENAME
-        if meta_file.is_file():
-            try:
-                own = json.loads(meta_file.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as e:
-                raise ValueError(f"{meta_file} is not valid JSON: {e}") from e
-            if not isinstance(own, dict):
-                raise ValueError(f"{meta_file} must contain a JSON object, e.g. {{\"edition\": \"2024\"}}.")
-            merged.update(own)
+        own = self._read_metadata_file(folder / METADATA_FILENAME)
+        if DESCRIPTION_KEY in own and resolved != root:
+            log.warning("[%s] %s in %s is ignored: only the collection's root _metadata.json sets the description.",
+                        self._label, DESCRIPTION_KEY, folder / METADATA_FILENAME)
+        merged.update(own)
         cache[folder] = merged
         return merged
+
+    def root_metadata(self) -> dict[str, Any]:
+        """The collection root's _metadata.json ({} if there is none).
+
+        Raises:
+            ValueError: It is not a valid JSON object.
+        """
+        return self._read_metadata_file(self.raw_dir / METADATA_FILENAME)
+
+    def _read_metadata_file(self, meta_file: Path) -> dict[str, Any]:
+        if not meta_file.is_file():
+            return {}
+        try:
+            data = json.loads(meta_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"{meta_file} is not valid JSON: {e}") from e
+        if not isinstance(data, dict):
+            raise ValueError(f"{meta_file} must contain a JSON object, e.g. {{\"edition\": \"2024\"}}.")
+        unknown = sorted(k for k in data if k.startswith(RESERVED_PREFIX) and k not in RESERVED_KEYS)
+        if unknown:
+            log.warning("[%s] Unknown setting(s) %s in %s are ignored. Keys starting with '%s' configure ingestion; "
+                        "valid: %s.", self._label, unknown, meta_file, RESERVED_PREFIX, ", ".join(sorted(RESERVED_KEYS)))
+        return data
 
     def _mode(self, merged_metadata: dict[str, Any], folder: Path) -> FileMode:
         value = merged_metadata.get(MODE_KEY)

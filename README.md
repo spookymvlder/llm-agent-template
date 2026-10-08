@@ -119,7 +119,7 @@ EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 | `CHUNK_SIZE` / `CHUNK_OVERLAP` | `512` / `50` | Splitter settings, in tokens |
 | `USE_CUDA` | `false` | Run HuggingFace embeddings on GPU if available |
 | `COLLECTIONS` | `documents` | Comma-separated collection names; the first is the default |
-| `COLLECTION_<NAME>_RAW_DIR` / `_TOP_K` / `_DESCRIPTION` | `data/raw/<name>` / `RETRIEVAL_TOP_K` / generic | Per-collection overrides. The description tells the agent what the collection contains |
+| `COLLECTION_<NAME>_RAW_DIR` / `_TOP_K` / `_DESCRIPTION` | `data/raw/<name>` / `RETRIEVAL_TOP_K` / from `_metadata.json` | Per-collection overrides. The description is better kept in the collection's `_metadata.json` (see Collections); the `.env` value overrides it |
 | `ENVIRONMENT` | `dev` | `dev`, `test`, or `prod` (dev enables hot reload) |
 | `AUTO_INGEST` | `true` | Ingest new (and, if enabled, changed) files on startup |
 | `DEFAULT_CHANGE_MODE` | `static` | `static`: new/changed files embed on every ingest; `manual`: they wait for `ingest --manual`. Per folder: `{"_mode": ...}` in `_metadata.json` |
@@ -162,6 +162,8 @@ python -m src.main ingest --manual             # also apply pending changes in m
 Stop the server before `--reindex`: it deletes and recreates the collections, and a running server keeps handles to the old ones. A reindex re-reads manual folders as they are on disk, drafts included. (Plain `ingest` and `POST /ingest` are safe while the server runs.)
 
 Place documents in `data/raw/<collection>/` (by default `data/raw/documents/`) before ingesting. Supported formats: `.txt`, `.md`, `.pdf`, `.html`, `.htm`, `.json`, `.csv`.
+
+PDFs are read with PyMuPDF (in `requirements.txt`), which keeps word spacing on typeset layouts where LlamaIndex's default reader glues words together (`Oneofeacharmourtype...`) — text like that embeds poorly and retrieval quietly suffers. Ingest logs a warning when a file's extracted text looks glued; check with the Retrieve tab or `POST /retrieve` that chunks read naturally.
 
 ---
 
@@ -274,7 +276,16 @@ Each document gets a stable id (`<path relative to the collection folder>#<posit
 
 ### Collections
 
-`COLLECTIONS=rules,transcripts` creates two collections, each with its own folder, search tool and optional `COLLECTION_<NAME>_DESCRIPTION` (which tells the agent when to search it). Use separate collections for different kinds of content; use metadata for variations within one kind (e.g. rulebook edition).
+`COLLECTIONS=rules,transcripts` creates two collections, each with its own folder and search tool. Use separate collections for different kinds of content; use metadata for variations within one kind (e.g. rulebook edition).
+
+Give each collection a description: it is part of the collection's search tool and is how the agent decides whether, and where, to search. Without one the agent may answer from general knowledge instead. Put it in the collection's root `_metadata.json` (a collection with no files, like one filled by streams, can still have its folder and this file):
+
+```json
+// data/raw/rules/_metadata.json
+{"_description": "Rules of Mythic Bastionland, a tabletop RPG about knights: the Knights and their abilities, Seers, combat, travel and Realms."}
+```
+
+It is read at startup (restart to apply an edit; nothing is re-embedded). `COLLECTION_<NAME>_DESCRIPTION` in `.env` overrides it, e.g. to try out wording. Startup logs a warning for collections without one.
 
 ### Static and manual folders
 
@@ -284,7 +295,9 @@ Files are **static** by default: new and changed files are embedded on every ing
 {"_mode": "manual"}
 ```
 
-Changes there are logged as pending until you apply them with `python -m src.main ingest --manual` or `POST /ingest {"include_manual": true}`. `DEFAULT_CHANGE_MODE` sets the default for folders that don't say. Keys starting with `_` configure ingestion and are not stored as metadata.
+Changes there are logged as pending until you apply them with `python -m src.main ingest --manual` or `POST /ingest {"include_manual": true}`. `DEFAULT_CHANGE_MODE` sets the default for folders that don't say.
+
+Keys starting with `_` configure ingestion and are never stored as metadata: `_mode` (any folder) and `_description` (collection root only). Unknown `_` keys are logged, so a typo doesn't fail silently.
 
 ### Streams (e.g. live transcripts)
 
