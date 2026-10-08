@@ -17,7 +17,9 @@ STREAM_ID = "stream_id"
 
 # _metadata.json keys starting with this prefix configure ingestion and are not stored as metadata.
 RESERVED_PREFIX = "_"
-MODE_KEY = "_mode"
+MODE_KEY = "_mode"                 # per folder: FileMode
+DESCRIPTION_KEY = "_description"   # collection root only: tells the agent what the collection contains
+RESERVED_KEYS = frozenset({MODE_KEY, DESCRIPTION_KEY})
 
 
 class FileMode(StrEnum):

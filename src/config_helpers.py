@@ -127,4 +127,6 @@ class CollectionSettings:
     name: str
     raw_dir: Path
     top_k: int
-    description: str       # shown to the agent so it knows when to search this collection
+    # Shown to the agent so it knows when to search this collection. None here means "not set in .env";
+    # open_collection() then uses "_description" from the collection's root _metadata.json, or a default.
+    description: str | None = None

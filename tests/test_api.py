@@ -67,6 +67,19 @@ def test_chat_returns_sources_and_keeps_conversation(make_client):
         assert c.post("/chat", json={"message": "  "}).status_code == 422
 
 
+def test_answer_is_logged_with_tool_calls_and_timing(make_client, caplog):
+    import logging
+    client, _ = make_client({"hello": '{"route": "direct", "confidence": 0.95, "reason": "greeting"}'})
+    with client as c, caplog.at_level(logging.INFO, logger="src.agent_setup.agent_runner"):
+        c.post("/chat", json={"message": "How does grappling work?"})
+        assert "Tool call: search_rules({'query': 'How does grappling work?'})" in caplog.text
+        assert "Tool result: search_rules returned 2 chunk(s): 20" in caplog.text     # '2014/grapple.txt (0.xx)'
+        assert "1 tool call(s), 2 source chunk(s)" in caplog.text and "2 LLM call(s)" in caplog.text
+        caplog.clear()
+        c.post("/chat", json={"message": "hello"})                                    # routed to the tool-less agent
+        assert "0 tool call(s)" in caplog.text and "did not use the document collections" in caplog.text
+
+
 def test_chat_stream_event_order(make_client):
     client, _ = make_client()
     with client as c:

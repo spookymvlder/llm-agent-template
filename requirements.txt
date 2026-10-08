@@ -8,6 +8,8 @@ llama-index-llms-ollama
 llama-index-embeddings-huggingface
 llama-index-embeddings-ollama
 llama-index-readers-file
+# PDF text extraction that keeps word spacing (used automatically when installed)
+pymupdf
 llama-index-vector-stores-chroma
 numpy==2.4.3
 pandas==3.0.1

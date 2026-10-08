@@ -408,8 +408,7 @@ def _collections(project_root: Path, raw_dir: Path, default_top_k: int) -> tuple
             name=name,
             raw_dir=(project_root / raw_override).resolve() if raw_override else raw_dir / name,
             top_k=as_int(os.getenv(f"COLLECTION_{key}_TOP_K"), default=default_top_k, min=1),
-            description=optional_str(os.getenv(f"COLLECTION_{key}_DESCRIPTION"))
-                        or f"Documents in the '{name}' collection.",
+            description=optional_str(os.getenv(f"COLLECTION_{key}_DESCRIPTION")),
         ))
     return tuple(result)
 
