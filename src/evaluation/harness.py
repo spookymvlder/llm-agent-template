@@ -3,13 +3,13 @@ Golden-set regression harness: did a change (model, chunking, prompt, router) ma
 
 A golden set is a JSON list (or {"cases": [...]}, or JSONL) of cases you write by hand:
 
-    {"id": "grapple-2024",
-     "question": "How does grappling work?",
-     "collection": "rules",                       # for retrieval metrics; default: first collection
-     "expected_route": "rules",                   # checked when the router is enabled
-     "expected_sources": ["2024/PHB.pdf"],        # doc ids, source paths (prefix of a doc id) or stream ids
-     "reference_answer": "An Unarmed Strike option; the target saves.",   # optional, for correctness
-     "filters": {"edition": "2024"}}              # optional, applied to the retrieval check
+    {"id": "vacation-2024",
+     "question": "How many vacation days do employees get?",
+     "collection": "handbook",                    # for retrieval metrics; default: first collection
+     "expected_route": "rag",                     # checked when the router is enabled
+     "expected_sources": ["2024/handbook.pdf"],   # doc ids, source paths (prefix of a doc id) or stream ids
+     "reference_answer": "25 days a year; up to 5 roll over.",   # optional, for correctness
+     "filters": {"version": "2024"}}              # optional, applied to the retrieval check
 
 Every field but `question` is optional; each check runs only when its field is present (and, for the
 judge checks, when JUDGE_MODEL is configured). Per case:
@@ -107,8 +107,8 @@ def load_golden(path: Path) -> list[GoldenCase]:
 
 
 def matches(expected: str, chunk: RetrievedChunk) -> bool:
-    """An expected source matches a chunk by doc id, by doc id prefix ('2024/PHB.pdf' matches
-    '2024/PHB.pdf#12'), by source path, or by stream id."""
+    """An expected source matches a chunk by doc id, by doc id prefix ('2024/handbook.pdf' matches
+    '2024/handbook.pdf#12'), by source path, or by stream id."""
     doc_id = chunk.doc_id or ""
     return (
         expected == doc_id

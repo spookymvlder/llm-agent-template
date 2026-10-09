@@ -89,7 +89,7 @@ async def stream_agent(
 
 
 def _chunk_label(chunk: RetrievedChunk) -> str:
-    """Short label for logs, e.g. 'Mythic+Bastionland.pdf p.130 (0.72)'."""
+    """Short label for logs, e.g. 'handbook.pdf p.12 (0.72)'."""
     m = chunk.metadata
     name = m.get("source_path") or m.get("stream_id") or chunk.doc_id or "?"
     page = f" p.{m['page_label']}" if m.get("page_label") else ""

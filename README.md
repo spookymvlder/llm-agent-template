@@ -4,12 +4,37 @@ A production-oriented RAG agent template built on LlamaIndex and FastAPI. Design
 
 ---
 
+## Start simple
+
+The defaults give you a chat agent over one folder of documents — no other setup:
+
+1. **Install** — see [Setup](#setup): a virtual environment, `pip install -r requirements.txt`, `cp .env.example .env`, and either [Ollama](https://ollama.com) with a model pulled or an API key in `.env`.
+2. **Add documents** — put PDFs, Markdown or text files in `data/raw/documents/`.
+3. **Describe them** — create `data/raw/documents/_metadata.json` containing `{"_description": "What these documents are about."}`. The agent reads this to decide when to search.
+4. **Run** — `python -m src.main serve` and open http://localhost:8000. New files are ingested at startup.
+
+Use the **Retrieve** tab to check what a search returns, and the server log to see which tools each answer used.
+
+Everything else is optional and off (or invisible) until you need it:
+
+| When you need... | See |
+|---|---|
+| Several kinds of content, each searched separately | [Collections](#collections) |
+| Tags such as a document version, for filtering and citations | [Folder metadata](#folder-metadata) |
+| Hand-edited files that shouldn't be picked up half-finished | [Static and manual folders](#static-and-manual-folders) |
+| Text that arrives while the app runs (transcripts, chat logs, feeds) | [Streams](#streams-live-text) |
+| Different handling for different kinds of question | [Router](#router-optional) |
+| Tables (CSV/Parquet), custom preprocessing, retrieval post-processing | [Per-collection options](#per-collection-options-schema-preprocessing-postprocessors) |
+| To know whether a change made answers better or worse | [Evaluation](#evaluation) |
+
+---
+
 ## Features
 
 - Multi-provider LLMs: Ollama (local), OpenAI, Anthropic, Google GenAI — separately configurable for the agent, an optional router and an evaluation judge, with rate limits and Ollama thinking control
 - Multiple named ChromaDB collections, each with its own folder, search tool and description
 - File ingestion with SHA-256 change detection, folder-level `_metadata.json`, static/manual update modes, and tabular (CSV/JSONL/Parquet) collections
-- Runtime ingestion: append-only **streams** (e.g. live transcripts) searchable immediately and re-chunked on close, plus ad-hoc documents
+- Runtime ingestion: append-only **streams** (meeting transcripts, chat logs, event feeds) searchable immediately and re-chunked on close, plus ad-hoc documents
 - Search tools return chunks *with metadata*; every chat response lists its `sources`
 - Optional LLM router with pluggable routes (agents, fixed replies, or any custom handler)
 - Per-collection preprocessing steps and retrieval postprocessors
@@ -37,13 +62,13 @@ FastAPI (fastapi_app.py) / CLI (main.py) ── chat.respond(): router → route
 
 | To... | Use |
 |---|---|
-| Add a corpus | `COLLECTIONS=...` + `COLLECTION_<NAME>_DESCRIPTION` |
+| Add a corpus | `COLLECTIONS=...` + `{"_description": ...}` in its folder's `_metadata.json` |
 | Tag documents | `_metadata.json` in folders, `metadata` on `/documents` and `/streams`, or a preprocessing step |
 | Read a table as documents | `CollectionOptions(schema=DocumentSchema(tabular=True, ...))` |
 | Transform rows before embedding | `CollectionOptions(steps=[fn])` |
 | Act on retrieved chunks (e.g. by metadata) | `CollectionOptions(postprocessors=[...])`, or branch on `sources` in your code |
 | Add a tool | `agent_tools.py`, passed to `build_rag_agent(extra_tools=...)` |
-| Add a specialised agent | `build_rag_agent([ctx.collection("rules")])` → `ctx.agents["rules"]` |
+| Add a specialised agent | `build_rag_agent([ctx.collection("handbook")])` → `ctx.agents["handbook"]` |
 | Add a route | `bootstrap(routes=[...RouteSpec(...)])` with `ENABLE_ROUTER=true` |
 | Measure a change | `python -m src.main eval golden.json --compare <previous run>` |
 
@@ -154,8 +179,8 @@ python -m src.main chat
 
 ```bash
 python -m src.main ingest                      # all collections
-python -m src.main ingest -c rules             # one collection
-python -m src.main ingest -c rules --reindex   # delete and re-embed files + streams (after changing embedding/chunk settings)
+python -m src.main ingest -c handbook          # one collection
+python -m src.main ingest -c handbook --reindex  # delete and re-embed files + streams (after changing embedding/chunk settings)
 python -m src.main ingest --manual             # also apply pending changes in manual folders
 ```
 
@@ -163,7 +188,7 @@ Stop the server before `--reindex`: it deletes and recreates the collections, an
 
 Place documents in `data/raw/<collection>/` (by default `data/raw/documents/`) before ingesting. Supported formats: `.txt`, `.md`, `.pdf`, `.html`, `.htm`, `.json`, `.csv`.
 
-PDFs are read with PyMuPDF (in `requirements.txt`), which keeps word spacing on typeset layouts where LlamaIndex's default reader glues words together (`Oneofeacharmourtype...`) — text like that embeds poorly and retrieval quietly suffers. Ingest logs a warning when a file's extracted text looks glued; check with the Retrieve tab or `POST /retrieve` that chunks read naturally.
+PDFs are read with PyMuPDF (in `requirements.txt`), which keeps word spacing on typeset layouts where LlamaIndex's default reader glues words together (`Onlymanagerscanapprovetravel...`) — text like that embeds poorly and retrieval quietly suffers. Ingest logs a warning when a file's extracted text looks glued; check with the Retrieve tab or `POST /retrieve` that chunks read naturally.
 
 ---
 
@@ -240,20 +265,21 @@ requirements.txt            # + requirements-dev.txt (tests), requirements-eval.
 | `GET` | `/streams/{collection}` | List a collection's streams |
 | `POST` | `/ingest` | Sync collection folders now; `include_manual` applies pending manual changes |
 | `POST` | `/route` | Classify a message with the router without answering it (router enabled) |
-| `POST` | `/summarize` | Summarise every chunk matching `filters`, in order (e.g. `{"stream_id": "session-12"}`) |
+| `POST` | `/summarize` | Summarise every chunk matching `filters`, in order (e.g. `{"stream_id": "standup-2026-10-02"}`) |
 | `POST` | `/evaluate` | Evaluate a supplied answer against retrieved context (needs `JUDGE_MODEL`) |
 | `POST` | `/chat_and_evaluate` | Answer with a query engine, then evaluate it (needs `JUDGE_MODEL`) |
 | `GET` | `/docs` | Auto-generated Swagger UI |
 
 **Conversations.** Send `conversation_id` from a previous response to continue a conversation; omit it to start a new one. Histories live in server memory (lost on restart), capped by `MAX_CONVERSATIONS` and expired after `CONVERSATION_TTL_S` idle seconds.
 
-**Sources.** The agent's search tools return chunks (not a pre-written summary), and every chunk the agent was given is returned as `sources` with its collection, document id, text, score and metadata — so calling code can act on metadata (e.g. `edition`) directly.
+**Sources.** The agent's search tools return chunks (not a pre-written summary), and every chunk the agent was given is returned as `sources` with its collection, document id, text, score and metadata — so calling code can act on metadata (e.g. `version`) directly.
 
 **Runtime documents.** `POST /documents`:
 
 ```json
-{"collection": "transcripts",
- "documents": [{"id": "s12-0042", "text": "GM: The dragon flees north.", "metadata": {"session": 12}}]}
+{"collection": "tickets",
+ "documents": [{"id": "T-1042", "text": "Customer can't reset their password from the mobile app.",
+                "metadata": {"product": "mobile", "priority": "high"}}]}
 ```
 
 Documents go through the collection's preprocessing steps; re-posting an id replaces it. They have no source file, so `ingest --reindex` deletes them — use a stream, or a file in `data/raw/<collection>/`, for anything that must survive a reindex.
@@ -276,13 +302,13 @@ Each document gets a stable id (`<path relative to the collection folder>#<posit
 
 ### Collections
 
-`COLLECTIONS=rules,transcripts` creates two collections, each with its own folder and search tool. Use separate collections for different kinds of content; use metadata for variations within one kind (e.g. rulebook edition).
+`COLLECTIONS=handbook,meetings` creates two collections, each with its own folder and search tool. Use separate collections for different kinds of content; use metadata for variations within one kind (e.g. a policy's version).
 
 Give each collection a description: it is part of the collection's search tool and is how the agent decides whether, and where, to search. Without one the agent may answer from general knowledge instead. Put it in the collection's root `_metadata.json` (a collection with no files, like one filled by streams, can still have its folder and this file):
 
 ```json
-// data/raw/rules/_metadata.json
-{"_description": "Rules of Mythic Bastionland, a tabletop RPG about knights: the Knights and their abilities, Seers, combat, travel and Realms."}
+// data/raw/handbook/_metadata.json
+{"_description": "Acme Corp employee handbook: leave, benefits, expenses, remote work and IT policies."}
 ```
 
 It is read at startup (restart to apply an edit; nothing is re-embedded). `COLLECTION_<NAME>_DESCRIPTION` in `.env` overrides it, e.g. to try out wording. Startup logs a warning for collections without one.
@@ -299,28 +325,28 @@ Changes there are logged as pending until you apply them with `python -m src.mai
 
 Keys starting with `_` configure ingestion and are never stored as metadata: `_mode` (any folder) and `_description` (collection root only). Unknown `_` keys are logged, so a typo doesn't fail silently.
 
-### Streams (e.g. live transcripts)
+### Streams (live text)
 
-For text that arrives in pieces while the app runs:
+For text that arrives in pieces while the app runs — a meeting or call transcript, a chat log, field notes, an event feed:
 
 ```
-POST /streams/transcripts/session-12          {"text": "GM: The dragon flees north.", "metadata": {"session": 12}}
-POST /streams/transcripts/session-12          {"text": "Alice: I follow it.", "metadata": {"session": 12}}
-POST /streams/transcripts/session-12/close    {"metadata": {"date": "2026-10-02"}}
+POST /streams/meetings/standup-2026-10-02          {"text": "Ana: We moved the launch to May.", "metadata": {"team": "platform"}}
+POST /streams/meetings/standup-2026-10-02          {"text": "Ben: I'll update the roadmap.", "metadata": {"team": "platform"}}
+POST /streams/meetings/standup-2026-10-02/close    {"metadata": {"date": "2026-10-02"}}
 ```
 
-Each fragment is appended to `data/<env>/streams/<collection>/<stream_id>.jsonl` (per environment, so test sessions don't reach prod) and embedded at once — searchable immediately. Closing re-chunks by default: the fragment chunks are replaced by the whole stream as one document (carrying the close metadata plus any metadata every fragment shared), which retrieves better than many short fragments; pass `"rechunk": false` to keep the fragments. A reindex replays every stream the way it was last stored, so it reproduces the live index. `GET /streams/<collection>` lists streams.
+Each fragment is appended to `data/<env>/streams/<collection>/<stream_id>.jsonl` (per environment, so test data doesn't reach prod) and embedded at once — searchable immediately. Closing re-chunks by default: the fragment chunks are replaced by the whole stream as one document (carrying the close metadata plus any metadata every fragment shared), which retrieves better than many short fragments; pass `"rechunk": false` to keep the fragments. A reindex replays every stream the way it was last stored, so it reproduces the live index. `GET /streams/<collection>` lists streams.
 
 ### Folder metadata
 
 A `_metadata.json` object in any folder under `data/raw/<collection>/` is added to every file in that folder and below (nearer folders override). Editing it re-embeds the files it covers.
 
 ```
-data/raw/rules/
-  2014/_metadata.json   {"edition": "2014"}
-  2014/PHB.pdf
-  2024/_metadata.json   {"edition": "2024"}
-  2024/PHB.pdf
+data/raw/handbook/
+  2023/_metadata.json   {"version": "2023"}
+  2023/handbook.pdf
+  2024/_metadata.json   {"version": "2024"}
+  2024/handbook.pdf
 ```
 
 Metadata is shown to the LLM with each retrieved chunk and can be used in filters, but is **not** embedded by default, so tags don't skew similarity. File bookkeeping (hashes, sizes, dates) is hidden from the LLM.
@@ -338,11 +364,11 @@ def tag_speaker(df):                     # preprocessing step: DataFrame -> Data
     return df
 
 options = {
-    "rules": CollectionOptions(postprocessors=[MyEditionPostprocessor()]),
+    "handbook": CollectionOptions(postprocessors=[FlagSupersededPolicies()]),   # your BaseNodePostprocessor
     "papers": CollectionOptions(
         schema=DocumentSchema(tabular=True, id_column="id", text_columns=("title", "abstract")),
     ),
-    "transcripts": CollectionOptions(steps=[tag_speaker]),
+    "meetings": CollectionOptions(steps=[tag_speaker]),
 }
 ctx = bootstrap(Profile.SERVE, options=options)
 ```
@@ -364,25 +390,25 @@ A route is a name, a description the router reads, and an async-generator handle
 ```python
 from src.agent_setup import AgentFinished, RouteSpec, agent_route, build_rag_agent, default_routes
 
-open_questions: list[str] = []
+feature_requests: list[str] = []
 
-async def note_question(rc):              # rc: RouteContext (ctx, message, memory, decision)
-    open_questions.append(rc.message)
-    yield AgentFinished(response="Added to the open questions list.")
+async def log_request(rc):                # rc: RouteContext (ctx, message, memory, decision)
+    feature_requests.append(rc.message)
+    yield AgentFinished(response="Thanks, I've logged that as a feature request.")
 
 routes = [
-    agent_route("rules", "Questions about game rules.", agent_name="rules"),
-    agent_route("lore", "Questions about the world, characters or past sessions.", agent_name="lore"),
-    RouteSpec("offtopic", "Questions unrelated to the game.", note_question),
+    agent_route("policy", "Questions about company policies, benefits or procedures.", agent_name="policy"),
+    agent_route("history", "Questions about past meetings, decisions or who said what.", agent_name="history"),
+    RouteSpec("request", "Feature requests or product suggestions.", log_request),
 ]
-ctx = bootstrap(Profile.SERVE, routes=routes)       # with ROUTER_DEFAULT_ROUTE=rules
-ctx.agents["rules"] = build_rag_agent([ctx.collection("rules")])
-ctx.agents["lore"] = build_rag_agent([ctx.collection("transcripts"), ctx.collection("notes")])
+ctx = bootstrap(Profile.SERVE, routes=routes)       # with ROUTER_DEFAULT_ROUTE=policy
+ctx.agents["policy"] = build_rag_agent([ctx.collection("handbook")])
+ctx.agents["history"] = build_rag_agent([ctx.collection("meetings")])
 ```
 
 ## Summaries
 
-`summarize_documents(collection, filters)` (and `POST /summarize`) reads every chunk matching exact-match metadata filters in document order — not a similarity search — and tree-summarises them, so input isn't limited by the context window. For end-of-session notes: `{"collection": "transcripts", "filters": {"stream_id": "session-12"}}`.
+`summarize_documents(collection, filters)` (and `POST /summarize`) reads every chunk matching exact-match metadata filters in document order — not a similarity search — and tree-summarises them, so input isn't limited by the context window. For a finished meeting's minutes: `{"collection": "meetings", "filters": {"stream_id": "standup-2026-10-02"}}`.
 
 ## Adding Tools
 
@@ -425,7 +451,7 @@ Each case needs only a `question`; each check runs when its field is present (se
 | Field | Check |
 |---|---|
 | `expected_route` | Router accuracy (router enabled) |
-| `expected_sources` (+ `collection`, `filters`) | Retrieval hit rate, precision, recall, MRR, nDCG @k — the collection is searched directly, so it measures retrieval, not the agent's tool choice. Sources match doc ids, source paths (`2024/PHB.pdf` matches all its chunks) or stream ids |
+| `expected_sources` (+ `collection`, `filters`) | Retrieval hit rate, precision, recall, MRR, nDCG @k — the collection is searched directly, so it measures retrieval, not the agent's tool choice. Sources match doc ids, source paths (`2024/handbook.pdf` matches all its chunks) or stream ids |
 | always (unless `--no-answer`) | Full pipeline answer (fresh conversation per case), latency, sources used; with a judge: faithfulness, relevancy, guideline pass rate |
 | `reference_answer` | Judge correctness score (1–5) |
 
@@ -443,6 +469,18 @@ The `/evaluate` and `/chat_and_evaluate` endpoints run faithfulness, relevancy, 
   "guidelines":   [{ "passing": true, "feedback": "..." }]
 }
 ```
+
+---
+
+## Worked example: a tabletop RPG session assistant
+
+The template was shaped by this project, which shows how the optional pieces combine:
+
+- **`rules`** collection — rulebook PDFs, with `{"version": "2014"}` / `{"version": "2024"}` folder metadata for two editions; a postprocessor or route handler converts older-edition rules when they're retrieved (`sources` say which edition each passage came from).
+- **`transcripts`** collection — a Discord voice pipeline (speech-to-text) posts each utterance to `POST /streams/transcripts/session-12`; it's searchable at once, and closing the stream at session end re-chunks it for later lookups.
+- **Router** — classifies each question as a rules question (agent over `rules`), a world/lore question (agent over `transcripts`), or off-topic (a handler that appends it to the session's open-questions list).
+- **Summaries** — `POST /summarize {"collection": "transcripts", "filters": {"stream_id": "session-12"}}` writes the session notes.
+- **Manual folders** — hand-written campaign notes marked `{"_mode": "manual"}`, applied with `ingest --manual` once they're ready.
 
 ---
 

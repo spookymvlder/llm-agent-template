@@ -14,7 +14,7 @@ from src.indexing import CollectionHandle
 log = logging.getLogger(__name__)
 
 
-# Search-first: small local models otherwise treat domain questions ("what can the Violet Knight do?") as
+# Search-first: small local models otherwise treat domain questions ("what's our parental leave policy?") as
 # general knowledge and answer without searching. Projects with a router can rely on its `direct` route instead.
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful assistant that answers questions using searchable document collections.\n"

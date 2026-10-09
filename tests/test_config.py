@@ -58,12 +58,12 @@ def test_api_key_resolution(load):
 
 
 def test_collections_and_overrides(load, tmp_path):
-    cfg = load(COLLECTIONS="rules, world-notes", COLLECTION_WORLD_NOTES_TOP_K="9",
-               COLLECTION_RULES_RAW_DIR="corpus/rules", COLLECTION_RULES_DESCRIPTION="Rulebooks.")
-    rules, notes = cfg.collections
-    assert rules.raw_dir == (tmp_path / "corpus/rules").resolve() and rules.description == "Rulebooks."
+    cfg = load(COLLECTIONS="handbook, world-notes", COLLECTION_WORLD_NOTES_TOP_K="9",
+               COLLECTION_HANDBOOK_RAW_DIR="corpus/handbook", COLLECTION_HANDBOOK_DESCRIPTION="Handbooks.")
+    handbook, notes = cfg.collections
+    assert handbook.raw_dir == (tmp_path / "corpus/handbook").resolve() and handbook.description == "Handbooks."
     assert notes.name == "world-notes" and notes.top_k == 9 and notes.raw_dir.name == "world-notes"
-    assert cfg.default_collection is rules and cfg.collection("world-notes") is notes
+    assert cfg.default_collection is handbook and cfg.collection("world-notes") is notes
     with pytest.raises(KeyError):
         cfg.collection("nope")
 

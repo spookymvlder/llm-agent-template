@@ -161,7 +161,7 @@ def bootstrap(
                         include_manual: a rebuild includes every file).
         include_manual: Also embed new/changed files in MANUAL folders (see FileMode).
         options:        Per-collection schema, preprocessing steps and retrieval postprocessors, e.g.
-                        {"rules": CollectionOptions(steps=[tag_edition], postprocessors=[EditionNote()])}.
+                        {"handbook": CollectionOptions(steps=[tag_version], postprocessors=[FlagSuperseded()])}.
         routes:         Router routes (used when ENABLE_ROUTER=true). Default: rag / direct / clarify.
                         Handlers can use any agent in ctx.agents — add your own there after bootstrap,
                         or build them inside the handler.
