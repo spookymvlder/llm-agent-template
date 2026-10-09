@@ -4,7 +4,7 @@ Turns ingested rows into a DataFrame ready for embedding.
     preprocess(df, schema, steps) = sanitize(step_n(...step_1(df)))
 
 Project-specific steps are plain functions `DataFrame -> DataFrame` that add or change columns —
-e.g. tagging rows with a rulebook edition, classifying a speaker, or splitting a field. They run
+e.g. tagging rows with a policy version, classifying a speaker, or splitting a field. They run
 before sanitisation, so they may return lists, enums, dicts or NaN; sanitize() makes them
 ChromaDB-safe. Register them per collection with CollectionOptions(steps=[...]).
 """

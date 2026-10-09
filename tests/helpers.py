@@ -22,9 +22,9 @@ def stored(handle: CollectionHandle) -> list[tuple[str, str, dict]]:
     return sorted((m["document_id"], d, m) for d, m in zip(got["documents"], got["metadatas"]))
 
 
-def scripted_agent_llm(answer: str = "Grappling is an Unarmed Strike option.") -> MockFunctionCallingLLM:
+def scripted_agent_llm(answer: str = "Employees get 25 vacation days.") -> MockFunctionCallingLLM:
     """A tool-calling LLM: the first turn calls search_<collection> (collection named in the message after
-    'in:' — default 'rules'), the turn after a tool result answers. Tool-less agents answer directly."""
+    'in:' — default 'handbook'), the turn after a tool result answers. Tool-less agents answer directly."""
     def generate(messages):
         last = messages[-1]
         if any("no access to documents" in (m.content or "") for m in messages if m.role == MessageRole.SYSTEM):
@@ -32,7 +32,7 @@ def scripted_agent_llm(answer: str = "Grappling is an Unarmed Strike option.") -
         if last.role == MessageRole.TOOL:
             return ChatMessage(role="assistant", content=answer)
         text = last.content or ""
-        collection = text.split("in:", 1)[1].strip().split()[0] if "in:" in text else "rules"
+        collection = text.split("in:", 1)[1].strip().split()[0] if "in:" in text else "handbook"
         return ChatMessage(role="assistant", blocks=[
             ToolCallBlock(tool_call_id="t1", tool_name=f"search_{collection}", tool_kwargs={"query": text}),
         ])

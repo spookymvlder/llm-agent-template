@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -20,7 +20,17 @@ from src.indexing.chroma_index_manager import ChromaIndexManager
 from src.indexing.index_manager import IndexManager
 from src.indexing.streams import Fragment, Granularity, StreamInfo, StreamManager, common_metadata
 from src.preprocessing import PreprocessStep, preprocess
-from src.schema import DOC_ID, ORIGIN, ORIGIN_API, ORIGIN_STREAM, SOURCE_PATH, STREAM_ID, DocumentSchema, FileMode
+from src.schema import (
+    DESCRIPTION_KEY,
+    DOC_ID,
+    ORIGIN,
+    ORIGIN_API,
+    ORIGIN_STREAM,
+    SOURCE_PATH,
+    STREAM_ID,
+    DocumentSchema,
+    FileMode,
+)
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +73,7 @@ class RetrievedChunk:
 
 
 def metadata_filters(filters: Mapping[str, Any] | None) -> MetadataFilters | None:
-    """Exact-match filters, e.g. {"edition": "2024"} -> MetadataFilters. Values must match the stored type."""
+    """Exact-match filters, e.g. {"version": "2024"} -> MetadataFilters. Values must match the stored type."""
     if not filters:
         return None
     return MetadataFilters(filters=[MetadataFilter(key=k, value=v) for k, v in filters.items()])
@@ -89,7 +99,7 @@ class CollectionHandle:
     (add_documents / POST /documents), and streams (append_to_stream / POST /streams/...).
 
     Node postprocessors run after retrieval and before anything reaches the LLM — the place for
-    deterministic, metadata-driven handling (e.g. flagging chunks from an older edition of a rulebook).
+    deterministic, metadata-driven handling (e.g. flagging chunks from a superseded version of a policy).
     They apply to as_query_engine() and aretrieve(); a raw index.as_retriever() bypasses them.
     """
     settings: CollectionSettings
@@ -137,7 +147,7 @@ class CollectionHandle:
         Args:
             query:   Search text.
             top_k:   Defaults to the collection's top_k.
-            filters: Exact-match metadata filters, e.g. {"edition": "2024"}.
+            filters: Exact-match metadata filters, e.g. {"version": "2024"}.
             retriever_kwargs: Passed to index.as_retriever().
         """
         if filters:
@@ -155,7 +165,7 @@ class CollectionHandle:
 
     def get_chunks(self, filters: Mapping[str, Any] | None = None, limit: int | None = None) -> list[BaseNode]:
         """Every chunk matching exact-match `filters`, in document order (not similarity order) —
-        e.g. all of a session's transcript, for summarising. Postprocessors are not applied.
+        e.g. all of a meeting's notes, for summarising. Postprocessors are not applied.
 
         Raises:
             ValueError: More than `limit` chunks match.
@@ -340,6 +350,21 @@ class CollectionHandle:
         self.index = self.store.load_or_build().index
 
 
+def _resolve_description(settings: CollectionSettings, files: IndexManager) -> str:
+    """COLLECTION_<NAME>_DESCRIPTION from .env, else "_description" in the collection's root _metadata.json,
+    else a generic default (logged, since the agent then can't tell what the collection is for)."""
+    if settings.description:
+        return settings.description
+    from_file = files.root_metadata().get(DESCRIPTION_KEY)
+    if isinstance(from_file, str) and from_file.strip():
+        return from_file.strip()
+    log.warning(
+        "Collection '%s' has no description, so the agent can't tell what it contains or when to search it. "
+        'Add {"%s": "..."} to %s.', settings.name, DESCRIPTION_KEY, settings.raw_dir / "_metadata.json",
+    )
+    return f"Documents in the '{settings.name}' collection."
+
+
 def _document_order(node: BaseNode) -> tuple:
     """Sort key: document id with numeric '#n' suffixes compared as numbers (stream fragments, PDF pages),
     then position within the document."""
@@ -366,6 +391,13 @@ def open_collection(
         stream_dir: Environment-local folder for this collection's stream files.
     """
     options = options or CollectionOptions()
+    files = IndexManager(
+        raw_dir=settings.raw_dir,
+        manifest_path=manifest_dir / f"{settings.name}.json",
+        schema=options.schema,
+        default_mode=default_mode,
+    )
+    settings = replace(settings, description=_resolve_description(settings, files))
     store = ChromaIndexManager(
         chroma_dir=chroma_dir,
         collection_name=settings.name,
@@ -376,12 +408,7 @@ def open_collection(
     return CollectionHandle(
         settings=settings,
         store=store,
-        files=IndexManager(
-            raw_dir=settings.raw_dir,
-            manifest_path=manifest_dir / f"{settings.name}.json",
-            schema=options.schema,
-            default_mode=default_mode,
-        ),
+        files=files,
         streams=StreamManager(
             stream_dir=stream_dir,
             manifest_path=manifest_dir / f"{settings.name}.streams.json",

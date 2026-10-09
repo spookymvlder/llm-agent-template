@@ -172,7 +172,7 @@ async def chat_stream(body: ChatRequest, ctx: Ctx):
 
 @app.post("/route", response_model=RouteInfo)
 async def route(body: RouteRequest, ctx: Ctx):
-    """Classify a message without answering it (e.g. to sort questions pulled from a transcript)."""
+    """Classify a message without answering it (e.g. to sort incoming questions or tickets)."""
     if ctx.router is None:
         raise HTTPException(status_code=503, detail="Router is not enabled. Set ENABLE_ROUTER=true.")
     history = []
@@ -209,7 +209,7 @@ async def retrieve(body: RetrieveRequest, ctx: Ctx):
 
 @app.post("/documents", response_model=AddDocumentsResponse)
 async def add_documents(body: AddDocumentsRequest, ctx: Ctx):
-    """Add or replace documents in a collection at runtime (e.g. a transcript as it arrives).
+    """Add or replace documents in a collection at runtime (e.g. a support ticket or a note).
 
     Re-posting a document with the same id replaces it. Runtime documents have no source file, so
     `ingest --reindex` deletes them; use a stream (POST /streams/...) or a file in the collection
@@ -240,7 +240,7 @@ async def ingest(body: IngestRequest, ctx: Ctx):
 
 @app.post("/summarize", response_model=SummarizeResponse)
 async def summarize(body: SummarizeRequest, ctx: Ctx):
-    """Summarise every chunk matching `filters`, in document order (e.g. a closed session's transcript)."""
+    """Summarise every chunk matching `filters`, in document order (e.g. a finished meeting's notes)."""
     handle = _collection(ctx, body.collection)
     try:
         result = await summarize_documents(handle, body.filters, body.instruction or DEFAULT_INSTRUCTION)
@@ -262,7 +262,7 @@ async def list_streams(collection: str, ctx: Ctx):
 
 @app.post("/streams/{collection}/{stream_id}", response_model=StreamAppendResponse)
 async def append_to_stream(collection: str, stream_id: str, body: StreamAppendRequest, ctx: Ctx):
-    """Append a fragment (e.g. one utterance) to a stream, creating the stream on first use.
+    """Append a fragment (e.g. one utterance or log entry) to a stream, creating the stream on first use.
     It is saved to the stream's file and embedded immediately, so it is searchable at once."""
     handle = _collection(ctx, collection)
     try:

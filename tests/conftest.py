@@ -19,7 +19,7 @@ os.environ.update({
     "LLM_PROVIDER": "ollama",
     "LLM_MODEL": "test-model",
     "EMBEDDING_PROVIDER": "huggingface",
-    "COLLECTIONS": "rules,transcripts",
+    "COLLECTIONS": "handbook,meetings",
     "ENABLE_ROUTER": "false",
     "AUTO_INGEST": "true",
 })
@@ -49,15 +49,19 @@ def mock_models():
 
 @pytest.fixture
 def make_collection(tmp_path: Path) -> Callable[..., CollectionHandle]:
-    """Open a collection in its own temp folders: make_collection("rules", options=..., default_mode=...)."""
+    """Open a collection in its own temp folders: make_collection("handbook", options=..., default_mode=...).
+    description=None behaves like an unset COLLECTION_<NAME>_DESCRIPTION (resolved from _metadata.json)."""
     client = chromadb.PersistentClient(path=str(tmp_path / "chroma"))
 
-    def _make(name: str = "rules", options: CollectionOptions | None = None,
-              default_mode: FileMode = FileMode.STATIC, top_k: int = 5) -> CollectionHandle:
+    def _make(name: str = "handbook", options: CollectionOptions | None = None,
+              default_mode: FileMode = FileMode.STATIC, top_k: int = 5,
+              description: str | None = "default") -> CollectionHandle:
         raw = tmp_path / "raw" / name
         raw.mkdir(parents=True, exist_ok=True)
+        if description == "default":
+            description = f"The {name} collection."
         return open_collection(
-            CollectionSettings(name=name, raw_dir=raw, top_k=top_k, description=f"The {name} collection."),
+            CollectionSettings(name=name, raw_dir=raw, top_k=top_k, description=description),
             client=client,
             chroma_dir=tmp_path / "chroma",
             manifest_dir=tmp_path / "manifests",

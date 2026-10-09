@@ -17,7 +17,9 @@ STREAM_ID = "stream_id"
 
 # _metadata.json keys starting with this prefix configure ingestion and are not stored as metadata.
 RESERVED_PREFIX = "_"
-MODE_KEY = "_mode"
+MODE_KEY = "_mode"                 # per folder: FileMode
+DESCRIPTION_KEY = "_description"   # collection root only: tells the agent what the collection contains
+RESERVED_KEYS = frozenset({MODE_KEY, DESCRIPTION_KEY})
 
 
 class FileMode(StrEnum):
@@ -58,7 +60,7 @@ class DocumentSchema:
                              number is used, so reordering a table re-embeds it as different documents.
         metadata_columns:    Columns stored as metadata. None = every column that isn't text.
         embed_metadata_keys: Metadata included in the embedding text. Default none: vectors represent
-                             content only, so tags like an edition don't skew similarity.
+                             content only, so tags like a version don't skew similarity.
         hidden_llm_metadata_keys: Metadata kept from the LLM (it is still stored and filterable).
         tabular:             Read tables as one document per row instead of one document per file.
         text_separator:      Joins multiple text columns.

@@ -14,7 +14,7 @@ def router(replies, **kwargs):
 
 @pytest.mark.parametrize("message, reply, route, fallback", [
     ("hello", '{"route": "direct", "confidence": 0.95, "reason": "greeting"}', "direct", False),
-    ("rules", '<think>hmm</think>\n```json\n{"route": "rag", "confidence": 0.9, "reason": "r",}\n```', "rag", False),
+    ("handbook", '<think>hmm</think>\n```json\n{"route": "rag", "confidence": 0.9, "reason": "r",}\n```', "rag", False),
     ("garbage", "probably rag?", "rag", True),
     ("weather", '{"route": "weather", "confidence": 0.9, "reason": "x"}', "rag", True),
     ("unsure", '{"route": "direct", "confidence": 0.2, "reason": "meh"}', "rag", True),

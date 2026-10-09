@@ -1,20 +1,20 @@
 {
-  "_about": "Golden set for `python -m src.main eval examples/golden.example.json`. Only `question` is required; each check runs when its field is present. expected_sources match doc ids, source paths ('2024/PHB.pdf' matches every chunk of that file) or stream ids.",
+  "_about": "Golden set for `python -m src.main eval examples/golden.example.json`. Only `question` is required; each check runs when its field is present. expected_sources match doc ids, source paths ('2024/handbook.pdf' matches every chunk of that file) or stream ids.",
   "cases": [
     {
-      "id": "grapple-2024",
-      "question": "How does grappling work?",
-      "collection": "rules",
+      "id": "vacation-2024",
+      "question": "How many vacation days do employees get?",
+      "collection": "handbook",
       "expected_route": "rag",
-      "expected_sources": ["2024/grapple.txt"],
-      "reference_answer": "Grappling is an Unarmed Strike option; the target makes a saving throw to avoid it.",
-      "filters": {"edition": "2024"}
+      "expected_sources": ["2024/vacation.txt"],
+      "reference_answer": "Employees get 25 vacation days a year; up to 5 unused days roll over.",
+      "filters": {"version": "2024"}
     },
     {
-      "id": "dragon-direction",
-      "question": "Which way did the dragon flee in session 12?",
-      "collection": "transcripts",
-      "expected_sources": ["session-12"]
+      "id": "launch-decision",
+      "question": "When did the team decide to launch, in stand-up 12?",
+      "collection": "meetings",
+      "expected_sources": ["standup-12"]
     },
     {
       "id": "greeting",

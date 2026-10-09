@@ -1,5 +1,6 @@
 """
-Streams: documents that arrive in pieces while the app runs (e.g. a session transcript).
+Streams: documents that arrive in pieces while the app runs — live transcripts (meetings, calls),
+chat logs, field notes, event or sensor logs.
 
 Each fragment is appended to an environment-local JSONL file — the durable record — and embedded
 immediately so it is searchable at once. Closing a stream (by default) replaces its fragment chunks

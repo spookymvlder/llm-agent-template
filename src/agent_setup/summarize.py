@@ -1,4 +1,4 @@
-"""Summarise every chunk matching a metadata filter — e.g. a whole session transcript."""
+"""Summarise every chunk matching a metadata filter — e.g. all of a meeting's notes."""
 from __future__ import annotations
 
 import logging
@@ -39,8 +39,8 @@ async def summarize_documents(
     is summarised, then the summaries are summarised, so input size isn't limited by the context window.
     Chunk text is passed with its LLM-visible metadata (e.g. speaker, source) so the summary can use it.
 
-    Example — end-of-session notes:
-        summary = await summarize_documents(ctx.collection("transcripts"), {"stream_id": "session-12"})
+    Example — minutes for a finished meeting:
+        summary = await summarize_documents(ctx.collection("meetings"), {"stream_id": "standup-2026-10-02"})
 
     Args:
         collection:  Collection to read.
