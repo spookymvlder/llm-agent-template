@@ -60,7 +60,7 @@ class DocumentSchema:
                              number is used, so reordering a table re-embeds it as different documents.
         metadata_columns:    Columns stored as metadata. None = every column that isn't text.
         embed_metadata_keys: Metadata included in the embedding text. Default none: vectors represent
-                             content only, so tags like an edition don't skew similarity.
+                             content only, so tags like a version don't skew similarity.
         hidden_llm_metadata_keys: Metadata kept from the LLM (it is still stored and filterable).
         tabular:             Read tables as one document per row instead of one document per file.
         text_separator:      Joins multiple text columns.

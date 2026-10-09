@@ -15,10 +15,10 @@ def chunk(doc_id, **metadata):
 
 
 def test_matches():
-    assert matches("2024/PHB.pdf", chunk("2024/PHB.pdf#12"))
-    assert matches("session-12", chunk("session-12#3", stream_id="session-12"))
+    assert matches("2024/handbook.pdf", chunk("2024/handbook.pdf#12"))
+    assert matches("standup-12", chunk("standup-12#3", stream_id="standup-12"))
     assert matches("notes/a.txt", chunk("x", source_path="notes/a.txt"))
-    assert not matches("2024/PHB", chunk("2024/PHB.pdf#1"))
+    assert not matches("2024/handbook", chunk("2024/handbook.pdf#1"))
 
 
 def test_load_golden_formats(tmp_path):
@@ -34,18 +34,18 @@ def test_load_golden_formats(tmp_path):
 @pytest.fixture
 def ctx(make_collection):
     Settings.llm = scripted_agent_llm()
-    rules = make_collection("rules")
-    write(rules.settings.raw_dir / "2024" / "grapple.txt", "Grappling is an Unarmed Strike option.")
-    rules.sync()
-    handles = {"rules": rules}
+    handbook = make_collection("handbook")
+    write(handbook.settings.raw_dir / "2024" / "vacation.txt", "Employees get 25 vacation days.")
+    handbook.sync()
+    handles = {"handbook": handbook}
     return AppContext(profile=Profile.EVAL, collections=handles,
-                      agents={"rag": build_rag_agent([rules], build_generic_tools(handles))})
+                      agents={"rag": build_rag_agent([handbook], build_generic_tools(handles))})
 
 
 async def test_run_eval_report_and_compare(ctx, tmp_path):
     golden = write(tmp_path / "golden.json", json.dumps([
-        {"id": "hit", "question": "How does grappling work?", "expected_sources": ["2024/grapple.txt"]},
-        {"id": "miss", "question": "Flanking?", "expected_sources": ["2024/flanking.txt"]},
+        {"id": "hit", "question": "How many vacation days do employees get?", "expected_sources": ["2024/vacation.txt"]},
+        {"id": "miss", "question": "Parental leave?", "expected_sources": ["2024/parental-leave.txt"]},
         {"id": "answer-only", "question": "Anything"},
     ]))
     cases = load_golden(golden)
@@ -57,7 +57,7 @@ async def test_run_eval_report_and_compare(ctx, tmp_path):
     assert agg["retrieval.hit_rate@5"] == 0.5 and agg["retrieval.mrr"] == 0.5
     assert "judge.faithfulness_pass" not in agg                         # no judge configured
     by_id = {c.id: c for c in report.cases}
-    assert by_id["hit"].answer and by_id["hit"].answer_sources == ["2024/grapple.txt#0"]
+    assert by_id["hit"].answer and by_id["hit"].answer_sources == ["2024/vacation.txt#0"]
     md = (out / "base" / "report.md").read_text(encoding="utf-8")
     assert "## Retrieval misses" in md and "**miss**" in md
     assert json.loads((out / "base" / "report.json").read_text(encoding="utf-8"))["aggregate"] == agg

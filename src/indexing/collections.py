@@ -73,7 +73,7 @@ class RetrievedChunk:
 
 
 def metadata_filters(filters: Mapping[str, Any] | None) -> MetadataFilters | None:
-    """Exact-match filters, e.g. {"edition": "2024"} -> MetadataFilters. Values must match the stored type."""
+    """Exact-match filters, e.g. {"version": "2024"} -> MetadataFilters. Values must match the stored type."""
     if not filters:
         return None
     return MetadataFilters(filters=[MetadataFilter(key=k, value=v) for k, v in filters.items()])
@@ -99,7 +99,7 @@ class CollectionHandle:
     (add_documents / POST /documents), and streams (append_to_stream / POST /streams/...).
 
     Node postprocessors run after retrieval and before anything reaches the LLM — the place for
-    deterministic, metadata-driven handling (e.g. flagging chunks from an older edition of a rulebook).
+    deterministic, metadata-driven handling (e.g. flagging chunks from a superseded version of a policy).
     They apply to as_query_engine() and aretrieve(); a raw index.as_retriever() bypasses them.
     """
     settings: CollectionSettings
@@ -147,7 +147,7 @@ class CollectionHandle:
         Args:
             query:   Search text.
             top_k:   Defaults to the collection's top_k.
-            filters: Exact-match metadata filters, e.g. {"edition": "2024"}.
+            filters: Exact-match metadata filters, e.g. {"version": "2024"}.
             retriever_kwargs: Passed to index.as_retriever().
         """
         if filters:
@@ -165,7 +165,7 @@ class CollectionHandle:
 
     def get_chunks(self, filters: Mapping[str, Any] | None = None, limit: int | None = None) -> list[BaseNode]:
         """Every chunk matching exact-match `filters`, in document order (not similarity order) —
-        e.g. all of a session's transcript, for summarising. Postprocessors are not applied.
+        e.g. all of a meeting's notes, for summarising. Postprocessors are not applied.
 
         Raises:
             ValueError: More than `limit` chunks match.

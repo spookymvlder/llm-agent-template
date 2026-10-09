@@ -45,32 +45,32 @@ def test_changed_file_is_replaced_and_missing_file_kept(make_collection):
 def test_folder_metadata_inheritance_and_visibility(make_collection):
     h = make_collection()
     raw = h.settings.raw_dir
-    write(raw / "_metadata.json", '{"game": "dnd5e", "edition": "unknown"}')
-    write(raw / "2014" / "_metadata.json", '{"edition": "2014"}')
-    write(raw / "2014" / "grapple.txt", "Grappling uses an Athletics check.")
+    write(raw / "_metadata.json", '{"company": "acme", "version": "unknown"}')
+    write(raw / "2023" / "_metadata.json", '{"version": "2023"}')
+    write(raw / "2023" / "vacation.txt", "Employees get 20 vacation days.")
     h.sync()
     (_, _, md), = stored(h)
-    assert (md["game"], md["edition"], md["source_path"]) == ("dnd5e", "2014", "2014/grapple.txt")
+    assert (md["company"], md["version"], md["source_path"]) == ("acme", "2023", "2023/vacation.txt")
 
-    write(raw / "2014" / "_metadata.json", '{"edition": "2014", "errata": "2018"}')
-    assert h.sync().changed_files == ["2014/grapple.txt"]            # metadata edits re-embed
+    write(raw / "2023" / "_metadata.json", '{"version": "2023", "errata": "2018"}')
+    assert h.sync().changed_files == ["2023/vacation.txt"]            # metadata edits re-embed
     assert stored(h)[0][2]["errata"] == "2018"
 
 
 async def test_embeddings_see_content_only_llm_sees_metadata(make_collection):
     h = make_collection()
-    write(h.settings.raw_dir / "_metadata.json", '{"edition": "2024"}')
-    write(h.settings.raw_dir / "a.txt", "Grappling text.")
+    write(h.settings.raw_dir / "_metadata.json", '{"version": "2024"}')
+    write(h.settings.raw_dir / "a.txt", "Vacation policy text.")
     h.sync()
-    node = (await h.aretrieve("grappling"))[0].node
-    assert node.get_content(metadata_mode=MetadataMode.EMBED) == "Grappling text."
+    node = (await h.aretrieve("vacation"))[0].node
+    assert node.get_content(metadata_mode=MetadataMode.EMBED) == "Vacation policy text."
     llm_text = node.get_content(metadata_mode=MetadataMode.LLM)
-    assert "edition: 2024" in llm_text and "file_hash" not in llm_text
+    assert "version: 2024" in llm_text and "file_hash" not in llm_text
 
 
 def test_invalid_metadata_json(make_collection):
     h = make_collection()
-    write(h.settings.raw_dir / "_metadata.json", '{"edition": ')
+    write(h.settings.raw_dir / "_metadata.json", '{"version": ')
     write(h.settings.raw_dir / "a.txt", "x")
     with pytest.raises(ValueError, match="not valid JSON"):
         h.sync()
@@ -83,17 +83,17 @@ def test_manual_folders_wait_for_explicit_ingest(make_collection):
     h = make_collection()
     raw = h.settings.raw_dir
     write(raw / "notes" / "_metadata.json", '{"_mode": "manual", "kind": "notes"}')
-    notes = write(raw / "notes" / "house.txt", "Crits on 19-20.")
-    write(raw / "core.txt", "Core rules.")
+    notes = write(raw / "notes" / "remote.txt", "Remote work: 2 days a week.")
+    write(raw / "core.txt", "Core policies.")
     r = h.sync()
-    assert r.new_files == ["core.txt"] and r.pending_files == ["notes/house.txt"]
+    assert r.new_files == ["core.txt"] and r.pending_files == ["notes/remote.txt"]
 
-    assert h.sync(include_manual=True).new_files == ["notes/house.txt"]
+    assert h.sync(include_manual=True).new_files == ["notes/remote.txt"]
     md = next(m for d, _, m in stored(h) if d.startswith("notes"))
     assert md["kind"] == "notes" and "_mode" not in md
 
-    write(notes, "Crits on 18-20 (draft).")
-    assert h.sync().pending_files == ["notes/house.txt"]
+    write(notes, "Remote work: 3 days a week (draft).")
+    assert h.sync().pending_files == ["notes/remote.txt"]
     assert "draft" not in " ".join(t for _, t, _ in stored(h))
 
 
@@ -122,15 +122,15 @@ def test_tabular_schema_and_steps(make_collection):
 
 
 def test_add_documents_upsert_and_missing_metadata(make_collection):
-    h = make_collection("transcripts")
+    h = make_collection("meetings")
     ids = h.add_documents([
-        {"id": "s1", "text": "GM: The dragon flees.", "metadata": {"session": 12, "speakers": ["GM"]}},
-        {"text": "Player: I follow.", "metadata": {"session": 12}},
+        {"id": "s1", "text": "Ana: We moved the launch.", "metadata": {"meeting": 12, "speakers": ["Ana"]}},
+        {"text": "Ben: Agreed.", "metadata": {"meeting": 12}},
     ])
     assert ids[0] == "s1" and len(ids) == 2
-    h.add_documents([{"id": "s1", "text": "GM: The dragon flees south.", "metadata": {"session": 12}}])
+    h.add_documents([{"id": "s1", "text": "Ana: We moved the launch to June.", "metadata": {"meeting": 12}}])
     texts = {d: (t, m) for d, t, m in stored(h)}
-    assert texts["s1"][0] == "GM: The dragon flees south." and len(texts) == 2
+    assert texts["s1"][0] == "Ana: We moved the launch to June." and len(texts) == 2
     other = next(m for d, (_, m) in texts.items() if d != "s1")
     assert "speakers" not in other                                   # missing keys are omitted, not ""
     assert h.runtime_chunk_count() == 2
@@ -138,13 +138,13 @@ def test_add_documents_upsert_and_missing_metadata(make_collection):
 
 async def test_filters_and_get_chunks_order(make_collection):
     h = make_collection()
-    for ed in ("2014", "2024"):
-        write(h.settings.raw_dir / ed / "_metadata.json", f'{{"edition": "{ed}"}}')
-        write(h.settings.raw_dir / ed / "g.txt", f"Grappling {ed}.")
+    for ed in ("2023", "2024"):
+        write(h.settings.raw_dir / ed / "_metadata.json", f'{{"version": "{ed}"}}')
+        write(h.settings.raw_dir / ed / "g.txt", f"Vacation policy {ed}.")
     h.sync()
-    results = await h.search("grappling", filters={"edition": "2014"})
-    assert [r.metadata["edition"] for r in results] == ["2014"]
-    assert [n.ref_doc_id for n in h.get_chunks()] == ["2014/g.txt#0", "2024/g.txt#0"]
+    results = await h.search("vacation", filters={"version": "2023"})
+    assert [r.metadata["version"] for r in results] == ["2023"]
+    assert [n.ref_doc_id for n in h.get_chunks()] == ["2023/g.txt#0", "2024/g.txt#0"]
     with pytest.raises(ValueError, match="limit"):
         h.get_chunks(limit=1)
 

@@ -79,11 +79,11 @@ class IndexManager:
     with "_" configure ingestion instead — `"_mode": "manual"` makes changes wait for an explicit ingest
     (see FileMode).
 
-        data/raw/rules/
-          2014/_metadata.json   -> {"edition": "2014"}
-          2014/PHB.pdf
-          2024/_metadata.json   -> {"edition": "2024"}
-          2024/PHB.pdf
+        data/raw/handbook/
+          2023/_metadata.json   -> {"version": "2023"}
+          2023/handbook.pdf
+          2024/_metadata.json   -> {"version": "2024"}
+          2024/handbook.pdf
 
     Directory layout:
         data/
@@ -355,7 +355,7 @@ class IndexManager:
         except json.JSONDecodeError as e:
             raise ValueError(f"{meta_file} is not valid JSON: {e}") from e
         if not isinstance(data, dict):
-            raise ValueError(f"{meta_file} must contain a JSON object, e.g. {{\"edition\": \"2024\"}}.")
+            raise ValueError(f"{meta_file} must contain a JSON object, e.g. {{\"version\": \"2024\"}}.")
         unknown = sorted(k for k in data if k.startswith(RESERVED_PREFIX) and k not in RESERVED_KEYS)
         if unknown:
             log.warning("[%s] Unknown setting(s) %s in %s are ignored. Keys starting with '%s' configure ingestion; "

@@ -130,7 +130,7 @@ def build_search_tool(collection: CollectionHandle) -> FunctionTool:
         description=(
             f"Searches the '{collection.name}' collection and returns the most relevant passages, each with "
             f"its metadata (source file, page and any tags). Contents: {collection.description} "
-            "Optional `filters` restricts results to exact metadata matches, e.g. {\"edition\": \"2024\"}."
+            "Optional `filters` restricts results to exact metadata matches, e.g. {\"version\": \"2024\"}."
         ),
     )
 

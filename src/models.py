@@ -51,7 +51,7 @@ class RetrieveRequest(BaseModel):
     collection: str | None = Field(default=None, description="Defaults to the first collection in COLLECTIONS.")
     top_k: int | None = Field(default=None, ge=1, le=100)
     filters: dict[str, MetadataValue] | None = Field(
-        default=None, description='Exact-match metadata filters, e.g. {"edition": "2024"}.',
+        default=None, description='Exact-match metadata filters, e.g. {"version": "2024"}.',
     )
 
 class RetrieveResponse(BaseModel):
@@ -93,7 +93,7 @@ class IngestResponse(BaseModel):
 class SummarizeRequest(BaseModel):
     collection: str | None = Field(default=None, description="Defaults to the first collection in COLLECTIONS.")
     filters: dict[str, MetadataValue] | None = Field(
-        default=None, description='Exact-match filters selecting what to summarise, e.g. {"stream_id": "session-12"}.',
+        default=None, description='Exact-match filters selecting what to summarise, e.g. {"stream_id": "standup-2026-10-02"}.',
     )
     instruction: str | None = Field(default=None, description="What the summary should focus on.")
 

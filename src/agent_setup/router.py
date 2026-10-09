@@ -1,7 +1,7 @@
 """
 Optional query router: a cheap LLM call that picks how to handle a message before any agent runs.
 
-    decision = await router.classify("How does grappling work?")   # RouteDecision(route="rag", ...)
+    decision = await router.classify("How many vacation days do I get?")   # RouteDecision(route="rag", ...)
     async for event in router.route(decision.route).handler(route_ctx): ...
 
 A route is a name, a description the router LLM reads, and a handler. Handlers are async generators
