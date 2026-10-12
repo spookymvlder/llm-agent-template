@@ -25,6 +25,12 @@ def optional_bool(value: str | None) -> bool | None:
     return as_bool(value)
 
 
+def is_loopback_host(host: str) -> bool:
+    """True for addresses only reachable from this machine (127.x.x.x, ::1, localhost)."""
+    host = host.strip().lower().strip("[]")
+    return host in {"localhost", "::1"} or host.startswith("127.")
+
+
 def as_float(value: str | None, default: float) -> float:
     if value is None or value.strip() == "":
         return default

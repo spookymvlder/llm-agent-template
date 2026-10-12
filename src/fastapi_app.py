@@ -377,5 +377,5 @@ def _internal_error(action: str, e: Exception) -> HTTPException:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("src.fastapi_app:app", host="127.0.0.1", port=8000, reload=cfg.debug)
+    from src.main import serve
+    serve(cfg.server_host, cfg.server_port)

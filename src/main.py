@@ -12,15 +12,13 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
 
 from src.config import CONFIG as cfg
+from src.config_helpers import is_loopback_host
 from src.chat import answer
 from src.app_context import Profile
 from src.startup import bootstrap
 
 
 log = logging.getLogger(__name__)
-
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8000
 
 
 async def chat(question: str | None = None) -> None:
@@ -82,6 +80,18 @@ def evaluate(golden: Path, name: str | None, top_k: int | None, include_answer: 
     print(f"\nReport: {cfg.eval_dir / run_name / 'report.md'}")
 
 
+def serve(host: str, port: int) -> None:
+    """Run the FastAPI app with uvicorn (reloading on code changes in the dev environment)."""
+    if not 1 <= port <= 65535:
+        raise SystemExit(f"Invalid port {port}: use 1-65535.")
+    if not is_loopback_host(host):
+        log.warning(
+            "Serving on %s:%d, reachable from other machines. The API has no authentication and allows any "
+            "origin (CORS *): anyone who can reach it can chat, add documents and trigger ingestion.", host, port,
+        )
+    uvicorn.run("src.fastapi_app:app", host=host, port=port, reload=cfg.debug)
+
+
 def main() -> None:
     """
     Main access function. Can alternatively be launched through fastapi_app.py if just interested in launching server.
@@ -98,8 +108,8 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
 
     serve_p = sub.add_parser("serve", help="Start the FastAPI server (default)")
-    serve_p.add_argument("--host", default=DEFAULT_HOST)
-    serve_p.add_argument("--port", type=int, default=DEFAULT_PORT)
+    serve_p.add_argument("--host", help=f"Default: SERVER_HOST ({cfg.server_host})")
+    serve_p.add_argument("--port", type=int, help=f"Default: SERVER_PORT ({cfg.server_port})")
 
     chat_p = sub.add_parser("chat", help="Interactive CLI chat")
     chat_p.add_argument("-q", "--question", help="Ask one question, print the answer and exit")
@@ -129,12 +139,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command in ("serve", None):
-        uvicorn.run(
-            "src.fastapi_app:app",
-            host=getattr(args, "host", DEFAULT_HOST),
-            port=getattr(args, "port", DEFAULT_PORT),
-            reload=cfg.debug,
-        )
+        serve(getattr(args, "host", None) or cfg.server_host, getattr(args, "port", None) or cfg.server_port)
     elif args.command == "chat":
         asyncio.run(chat(args.question))
     elif args.command == "ingest":

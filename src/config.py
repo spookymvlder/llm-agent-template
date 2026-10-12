@@ -111,6 +111,10 @@ class AppConfig:
     # Evaluation
     eval_concurrency: int
 
+    # Server
+    server_host: str    # 127.0.0.1 = this machine only; 0.0.0.0 = every network interface
+    server_port: int
+
     # ---------------------------------------------------------------------------
     # Accessors
     # ---------------------------------------------------------------------------
@@ -249,6 +253,10 @@ class AppConfig:
 
             # Evaluation
             eval_concurrency=as_int(os.getenv("EVAL_CONCURRENCY"), default=1, min=1),
+
+            # Server. PORT is the variable hosting platforms (Cloud Run, Heroku, ...) set; SERVER_PORT wins.
+            server_host=(os.getenv("SERVER_HOST") or "127.0.0.1").strip(),
+            server_port=as_int(os.getenv("SERVER_PORT") or os.getenv("PORT"), default=8000),
         )
 
         log.debug(cfg.to_log_str())
@@ -280,6 +288,8 @@ class AppConfig:
 
         if self.distance_metric not in _DISTANCE_METRICS:
             problems.append(f"DISTANCE_METRIC must be one of {sorted(_DISTANCE_METRICS)}, got '{self.distance_metric}'.")
+        if not 1 <= self.server_port <= 65535:
+            problems.append(f"SERVER_PORT must be between 1 and 65535, got {self.server_port}.")
         if not 0.0 <= self.router_min_confidence <= 1.0:
             problems.append(f"ROUTER_MIN_CONFIDENCE must be between 0 and 1, got {self.router_min_confidence}.")
         if self.embedder_settings.chunk_overlap >= self.embedder_settings.chunk_size:
