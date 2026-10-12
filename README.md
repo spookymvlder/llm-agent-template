@@ -146,6 +146,7 @@ EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 | `COLLECTIONS` | `documents` | Comma-separated collection names; the first is the default |
 | `COLLECTION_<NAME>_RAW_DIR` / `_TOP_K` / `_DESCRIPTION` | `data/raw/<name>` / `RETRIEVAL_TOP_K` / from `_metadata.json` | Per-collection overrides. The description is better kept in the collection's `_metadata.json` (see Collections); the `.env` value overrides it |
 | `ENVIRONMENT` | `dev` | `dev`, `test`, or `prod` (dev enables hot reload) |
+| `SERVER_HOST` / `SERVER_PORT` | `127.0.0.1` / `8000` | Where `serve` listens (`--host` / `--port` override). Non-local hosts log a warning: the API has no auth |
 | `AUTO_INGEST` | `true` | Ingest new (and, if enabled, changed) files on startup |
 | `DEFAULT_CHANGE_MODE` | `static` | `static`: new/changed files embed on every ingest; `manual`: they wait for `ingest --manual`. Per folder: `{"_mode": ...}` in `_metadata.json` |
 | `RETRIEVAL_TOP_K` | `5` | Number of chunks retrieved per query |
@@ -165,9 +166,11 @@ Configuration is parsed when `src.config` is imported and validated at startup; 
 ### Start the web server
 
 ```bash
-python -m src.main serve
-# Navigate to http://localhost:8000
+python -m src.main serve                     # http://localhost:8000
+python -m src.main serve --port 8080         # one-off override
 ```
+
+The address comes from `SERVER_HOST` / `SERVER_PORT` in `.env` (default `127.0.0.1:8000`; `PORT`, as set by hosting platforms, is used if `SERVER_PORT` isn't), and `--host` / `--port` override it. Binding to `0.0.0.0` makes the API reachable from other machines; it has no authentication and allows any origin, so startup warns when the host isn't local.
 
 ### Interactive CLI chat
 

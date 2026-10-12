@@ -9,14 +9,16 @@ from src.providers import LLMProvider
 from src.schema import FileMode
 
 _PREFIXES = ("LLM_", "ROUTER_", "JUDGE_", "COLLECTION", "OPENAI_", "GOOGLE_", "ANTHROPIC_", "DISTANCE_",
-             "CHUNK_", "TEMPERATURE", "CONTEXT_WINDOW", "DEFAULT_CHANGE_MODE", "REINDEX_CHANGED_FILES", "ENABLE_ROUTER")
+             "CHUNK_", "TEMPERATURE", "CONTEXT_WINDOW", "DEFAULT_CHANGE_MODE", "REINDEX_CHANGED_FILES", "ENABLE_ROUTER",
+             "SERVER_")
+_EXACT = ("PORT",)
 
 
 @pytest.fixture
 def load(monkeypatch, tmp_path):
     """Load AppConfig from only the given env vars (no .env file, no inherited LLM/collection settings)."""
     for key in list(os.environ):
-        if key.startswith(_PREFIXES):
+        if key.startswith(_PREFIXES) or key in _EXACT:
             monkeypatch.delenv(key)
 
     def _load(**env: str) -> AppConfig:
@@ -96,3 +98,49 @@ def test_invalid_provider_lists_options(load):
 def test_invalid_change_mode_lists_options(load):
     with pytest.raises(ValueError, match="manual"):
         load(DEFAULT_CHANGE_MODE="sometimes")
+
+
+# ---- server address --------------------------------------------------------------
+
+def test_server_address_defaults_and_precedence(load):
+    cfg = load()
+    assert (cfg.server_host, cfg.server_port) == ("127.0.0.1", 8000)
+
+
+def test_platform_port_fallback(load):
+    assert load(PORT="9000").server_port == 9000
+
+
+def test_server_port_beats_platform_port(load):
+    assert load(PORT="9000", SERVER_PORT="8100", SERVER_HOST="0.0.0.0").server_port == 8100
+
+
+def test_invalid_server_port(load):
+    with pytest.raises(ConfigError, match="SERVER_PORT"):
+        load(SERVER_PORT="70000").validate()
+
+
+@pytest.mark.parametrize("host, local", [
+    ("127.0.0.1", True), ("localhost", True), ("::1", True), ("[::1]", True), ("127.0.1.1", True),
+    ("0.0.0.0", False), ("192.168.1.20", False), ("::", False),
+])
+def test_is_loopback_host(host, local):
+    from src.config_helpers import is_loopback_host
+    assert is_loopback_host(host) is local
+
+
+def test_serve_uses_config_flags_override_and_warns_when_exposed(monkeypatch, caplog):
+    import sys
+    import src.main as main_mod
+
+    calls = []
+    monkeypatch.setattr(main_mod.uvicorn, "run", lambda app, **kw: calls.append(kw))
+    monkeypatch.setattr(sys, "argv", ["main", "serve"])
+    main_mod.main()
+    assert (calls[-1]["host"], calls[-1]["port"]) == (main_mod.cfg.server_host, main_mod.cfg.server_port)
+
+    monkeypatch.setattr(sys, "argv", ["main", "serve", "--host", "0.0.0.0", "--port", "8123"])
+    with caplog.at_level(logging.WARNING):
+        main_mod.main()
+    assert (calls[-1]["host"], calls[-1]["port"]) == ("0.0.0.0", 8123)
+    assert "no authentication" in caplog.text
